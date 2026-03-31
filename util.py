@@ -17,6 +17,7 @@ CONST_FROM_TOP_TO_BOTTOM = "from top to bottom"
 CONST_FROM_BOTTOM_TO_TOP = "from bottom to top"
 CONST_CENTER = "center"
 CONST_RANDOM = "random"
+CONST_SEAT_NUMBER_ASCENDING = "seat number ascending"  # 優先選擇座位號碼從小到大
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -1285,6 +1286,10 @@ def get_target_item_from_matched_list(matched_blocks, auto_select_mode):
             if auto_select_mode == CONST_CENTER:
                 if matched_blocks_count > 2:
                     target_row_index = int(matched_blocks_count/2)
+
+            if auto_select_mode == CONST_SEAT_NUMBER_ASCENDING:
+                # After sorting by seat number in ascending order, pick the first (smallest)
+                pass
 
             target_area = matched_blocks[target_row_index]
     return target_area

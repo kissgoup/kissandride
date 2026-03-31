@@ -1,5 +1,5 @@
 {
-    "homepage": "about:blank",
+    "homepage": "https://kham.com.tw/",
     "browser": "chrome",
     "language": "\u7e41\u9ad4\u4e2d\u6587",
     "ticket_number": 2,
@@ -14,11 +14,11 @@
     "date_auto_select": {
         "enable": true,
         "date_keyword": "",
-        "mode": "random"
+        "mode": "from top to bottom"
     },
     "area_auto_select": {
         "enable": true,
-        "mode": "random",
+        "mode": "from bottom to top",
         "area_keyword": ""
     },
     "keyword_exclude": "\"\u8f2a\u6905\",\"\u8eab\u969c\",\"\u8eab\u5fc3 \u969c\u7919\",\"Restricted View\",\"\u71c8\u67f1\u906e\u853d\",\"\u8996\u7dda\u4e0d\u5b8c\u6574\"",
@@ -73,22 +73,22 @@
         "udn_password_plaintext": "",
         "ticketplus_password_plaintext": "",
         "chrome_extension": true,
-        "disable_adjacent_seat": false,
-        "hide_some_image": false,
-        "block_facebook_network": false,
+        "disable_adjacent_seat": true,
+        "hide_some_image": true,
+        "block_facebook_network": true,
         "headless": false,
         "verbose": false,
         "auto_guess_options": true,
         "user_guess_string": "",
         "remote_url": "\"http://127.0.0.1:16888/\"",
-        "auto_reload_page_interval": 0.1,
+        "auto_reload_page_interval": 0.5,
         "auto_reload_overheat_count": 4,
         "auto_reload_overheat_cd": 1.0,
         "reset_browser_interval": 0,
         "proxy_server_port": "",
-        "window_size": "480,1024",
-        "idle_keyword": "",
-        "resume_keyword": "",
+        "window_size": "960,1024",
+        "idle_keyword": "\"0:49\"",
+        "resume_keyword": "\"59:58\"",
         "idle_keyword_second": "",
         "resume_keyword_second": ""
     }

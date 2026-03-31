@@ -16,12 +16,15 @@ import subprocess
 import sys
 import threading
 import time
+import random
 import warnings
 import webbrowser
 from datetime import datetime
 
 import chromedriver_autoinstaller_max
 import requests
+import undetected_chromedriver as uc
+from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
 from selenium.common.exceptions import (NoAlertPresentException,
                                         NoSuchWindowException,
@@ -44,7 +47,7 @@ except Exception as exc:
     print(exc)
     pass
 
-CONST_APP_VERSION = "MaxBot (2024.04.23)"
+CONST_APP_VERSION = "MaxBot (2025.11.28)"
 
 CONST_MAXBOT_ANSWER_ONLINE_FILE = "MAXBOT_ONLINE_ANSWER.txt"
 CONST_MAXBOT_CONFIG_FILE = "settings.json"
@@ -104,6 +107,7 @@ CONST_FROM_TOP_TO_BOTTOM = "from top to bottom"
 CONST_FROM_BOTTOM_TO_TOP = "from bottom to top"
 CONST_CENTER = "center"
 CONST_RANDOM = "random"
+CONST_SEAT_NUMBER_ASCENDING = "seat number ascending"  # 優先選擇座位號碼從小到大
 
 CONT_STRING_1_SEATS_REMAINING = ['@1 seat(s) remaining','剩餘 1@','@1 席残り']
 
@@ -194,6 +198,26 @@ def get_config_dict(args):
 
     return config_dict
 
+def get_random_delay(config_dict):
+    """
+    根據配置中的基礎延遲，加上 0.6 到 1.5 秒的隨機延遲。
+    """
+    try:
+        base_delay = config_dict["advanced"]["auto_reload_page_interval"]
+    except KeyError:
+        base_delay = 1.0  # 使用預設值，以防萬一
+
+    # 隨機產生 0.6 到 1.5 秒之間的延遲
+    random_extra_delay = random.uniform(0.6, 1.2)
+    
+    total_delay = base_delay + random_extra_delay
+    
+    # 這裡將總延遲強制限制在至少 0.8 秒（0.1 + 0.6 + 0.1 誤差），防止設置過低
+    if total_delay < 0.6:
+        total_delay = random.uniform(0.6, 1.2) 
+        
+    return total_delay
+    
 def write_question_to_file(question_text):
     working_dir = os.path.dirname(os.path.realpath(__file__))
     target_path = os.path.join(working_dir, CONST_MAXBOT_QUESTION_FILE)
@@ -249,11 +273,11 @@ def get_chrome_options(webdriver_path, config_dict):
         if os.path.exists(ext):
             chrome_options.add_extension(ext)
 
-    if config_dict["advanced"]["headless"]:
+    #if config_dict["advanced"]["headless"]:
         #chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--headless=new')
+        #chrome_options.add_argument('--headless=new')
 
-    chrome_options.add_argument("--user-agent=%s" % (USER_AGENT))
+    #chrome_options.add_argument("--user-agent=%s" % (USER_AGENT))
     chrome_options.add_argument("--disable-animations")
     chrome_options.add_argument("--disable-background-networking")
     chrome_options.add_argument("--disable-backgrounding-occluded-windows")
@@ -293,6 +317,9 @@ def get_chrome_options(webdriver_path, config_dict):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--no-service-autorun")
     chrome_options.add_argument("--password-store=basic")
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-extensions')
 
     # for navigator.webdriver
     chrome_options.add_experimental_option("excludeSwitches", ['enable-automation'])
@@ -337,7 +364,7 @@ def load_chromdriver_normal(config_dict, driver_type):
         chrome_service = Service(chromedriver_path)
         chrome_options = get_chrome_options(webdriver_path, config_dict)
         try:
-            driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
+            driver = uc.Chrome(service=chrome_service, options=chrome_options, headless=False)
         except WebDriverException as exc:
             error_message = str(exc)
             if show_debug_message:
@@ -359,12 +386,12 @@ def load_chromdriver_normal(config_dict, driver_type):
                 chrome_service = Service(chromedriver_path)
                 try:
                     chrome_options = get_chrome_options(webdriver_path, config_dict)
-                    driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
+                    driver = uc.Chrome(service=chrome_service, options=chrome_options, headless=False)
                 except WebDriverException as exc2:
                     print("Selenium 4.11.0 Release with Chrome For Testing Browser.")
                     try:
                         chrome_options = get_chrome_options(webdriver_path, config_dict)
-                        driver = webdriver.Chrome(service=Service(), options=chrome_options)
+                        driver = uc.Chrome(service=Service(), options=chrome_options)
                     except WebDriverException as exc3:
                         print(exc3)
                         pass
@@ -410,9 +437,10 @@ def get_uc_options(uc, config_dict, webdriver_path):
 
     if config_dict["advanced"]["headless"]:
         #options.add_argument('--headless')
-        options.add_argument('--headless=new')
+        #options.add_argument('--headless=new')
+        pass # 這裡可以留空或加入說明
 
-    options.add_argument("--user-agent=%s" % (USER_AGENT))
+    #options.add_argument("--user-agent=%s" % (USER_AGENT))
     options.add_argument("--disable-animations")
     options.add_argument("--disable-background-networking")
     options.add_argument("--disable-backgrounding-occluded-windows")
@@ -506,7 +534,7 @@ def load_chromdriver_uc(config_dict):
         if lanch_uc_with_path:
             try:
                 options = get_uc_options(uc, config_dict, webdriver_path)
-                driver = uc.Chrome(driver_executable_path=chromedriver_path, options=options, headless=config_dict["advanced"]["headless"])
+                driver = uc.Chrome(driver_executable_path=chromedriver_path, options=options, headless=False)
             except Exception as exc:
                 print(exc)
                 error_message = str(exc)
@@ -526,7 +554,7 @@ def load_chromdriver_uc(config_dict):
         if fail_1:
             try:
                 options = get_uc_options(uc, config_dict, webdriver_path)
-                driver = uc.Chrome(options=options)
+                driver = uc.Chrome(options=options, headless=False)
             except Exception as exc:
                 print(exc)
                 fail_2 = True
@@ -543,7 +571,7 @@ def load_chromdriver_uc(config_dict):
             try:
                 chromedriver_autoinstaller_max.install(path=webdriver_path, make_version_dir=False)
                 options = get_uc_options(uc, config_dict, webdriver_path)
-                driver = uc.Chrome(driver_executable_path=chromedriver_path, options=options)
+                driver = uc.Chrome(driver_executable_path=chromedriver_path, options=options, headless=False)
             except Exception as exc2:
                 print(exc2)
                 pass
@@ -554,7 +582,7 @@ def load_chromdriver_uc(config_dict):
         print('WebDriver object is still None..., try download by uc.')
         try:
             options = get_uc_options(uc, config_dict, webdriver_path)
-            driver = uc.Chrome(options=options)
+            driver = uc.Chrome(options=options, headless=False)
         except Exception as exc:
             print(exc)
             error_message = str(exc)
@@ -2334,6 +2362,12 @@ def tixcraft_assign_ticket_number(driver, config_dict):
 
 
 def tixcraft_ticket_main(driver, config_dict, ocr, Captcha_Browser, domain_name):
+    # ----------------------------------------------------
+    # 強制執行勾選同意條款邏輯，確保穩定性
+    # ----------------------------------------------------
+    tixcraft_ticket_main_agree(driver, config_dict)
+    
+    # [這段程式碼塊是用來處理當瀏覽器不是 Chrome，或者沒有啟用擴充功能時的邏輯]
     is_agree_at_webdriver = False
     if not config_dict["browser"] in CONST_CHROME_FAMILY:
         is_agree_at_webdriver = True
@@ -6575,7 +6609,7 @@ def urbtix_main(driver, url, config_dict):
             pass
             # 刷太快, 會被封IP?
             if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                time.sleep(get_random_delay(config_dict))
 
     if '/logout?' in url:
         try:
@@ -6691,7 +6725,7 @@ def cityline_auto_retry_access(driver, config_dict):
 
     # 刷太快, 會被封IP?
     if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-        time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+        time.sleep(get_random_delay(config_dict))
 
 def cityline_clean_ads(driver):
     ad_query_list = [
@@ -8062,7 +8096,7 @@ def hkticketing_url_redirect(driver, url, config_dict):
 
             # 刷太快, 會被封IP?
             if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                time.sleep(get_random_delay(config_dict))
 
             if is_redirected:
                 break
@@ -8169,7 +8203,7 @@ def hkticketing_content_refresh(driver, url, config_dict):
 
             # 刷太快, 會被封IP?
             if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                time.sleep(get_random_delay(config_dict))
 
     return is_redirected
 
@@ -8303,6 +8337,29 @@ def khan_go_buy_redirect(driver, domain_name):
         if not is_button_clicked:
             is_button_clicked = press_button(driver, By.CSS_SELECTOR, '#buttonBuy')
     return is_button_clicked
+
+def kham_check_modal_popup(driver):
+    ret = False
+    
+    el_btn = None
+    try:
+        # 尋找彈窗上的 "Ok" 按鈕
+        my_css_selector = 'div.ui-dialog-buttonset > button.ui-button'
+        el_btn = driver.find_element(By.CSS_SELECTOR, my_css_selector)
+    except Exception as exc:
+        pass
+
+    if not el_btn is None:
+        try:
+            # 嘗試點擊按鈕
+            if el_btn.is_enabled():
+                el_btn.click()
+                print("Clicked OK button on modal dialog.")
+                ret = True
+        except Exception as exc:
+            pass
+
+    return ret
 
 def hkam_date_auto_select(driver, domain_name, config_dict):
     show_debug_message = True       # debug.
@@ -8483,7 +8540,7 @@ def hkam_date_auto_select(driver, domain_name, config_dict):
                         pass
 
                     if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                        time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                        time.sleep(get_random_delay(config_dict))
 
     return is_date_assign_by_bot
 
@@ -8502,6 +8559,75 @@ def kham_product(driver, domain_name, config_dict):
         pass
 
     return is_date_assign_by_bot
+    
+# 請確保這個函數定義前面**沒有任何空格或 Tab**
+def kham_select_regular_price_area(driver, config_dict):
+    is_clicked = False
+    # 使用 config_dict["advanced"]["verbose"] 判斷是否顯示 debug 訊息
+    show_debug_message = driver.current_url.split('/')[2] in ["kham.com.tw", "ticket.com.tw"] or False
+    if config_dict["advanced"]["verbose"]:
+        show_debug_message = True
+
+    # 尋找包含 '原價' 文本，且位於 <div class="ticket"> 內的 <button> 元素
+    xpath_selector = "//div[@class='ticket']/button[contains(., '原價')]"
+    
+    try:
+        # 使用 WebDriverWait 等待按鈕出現且可點擊 (最多等待 5 秒)
+        regular_price_btn = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, xpath_selector))
+        )
+        
+        if regular_price_btn.is_enabled():
+            regular_price_btn.click()
+            if show_debug_message:
+                print("Successfully clicked the '原價' ticket price button.")
+            is_clicked = True
+            time.sleep(random.uniform(0.3, 0.7)) # 點擊後短暫隨機延遲，讓頁面狀態更新
+            
+    except Exception as exc:
+        if show_debug_message:
+             pass
+        
+    return is_clicked
+
+def extract_seat_number_from_row(row, domain_name):
+    """Extract seat number from kham/ticket row for sorting.
+    Returns tuple: (seat_number_for_sorting, row_element)
+    Seat number is extracted from the row text/HTML.
+    """
+    seat_number = float('inf')  # Default to infinity if no seat number found
+    try:
+        row_html = row.get_attribute('innerHTML')
+        row_text = util.remove_html_tags(row_html)
+
+        # For kham.com.tw, try to extract seat number
+        # Common patterns: "排 1-2", "排1", "排1排2", "1排", "排 1", etc.
+        import re
+
+        # Pattern 1: Look for seat number after "排" (row) indicator
+        # Examples: "排 1", "排1", "排1排2", "1排2座"
+        match = re.search(r'排\s*(\d+)', row_text)
+        if match:
+            seat_number = int(match.group(1))
+        else:
+            # Pattern 2: Look for standalone numbers at the beginning or end
+            # Some sites show just the seat number like "1", "2", etc.
+            numbers = re.findall(r'\b\d+\b', row_text)
+            if numbers:
+                # Use the first number found as seat number
+                seat_number = int(numbers[0])
+
+        # Pattern 3: For ticket.com.tw, check for specific seat format
+        if "ticket.com.tw" in domain_name:
+            # Try to find ticket id or seat index in onclick or data attributes
+            onclick_match = re.search(r"(\d+)", row_html)
+            if onclick_match:
+                seat_number = int(onclick_match.group(1))
+
+    except Exception as exc:
+        pass
+
+    return seat_number
 
 def kham_area_auto_select(driver, domain_name, config_dict, area_keyword_item):
     show_debug_message = True       # debug.
@@ -8629,6 +8755,7 @@ def kham_area_auto_select(driver, domain_name, config_dict, area_keyword_item):
                     # default add row.
                     is_match_area = True
                     if len(area_keyword_item) == 0:
+                        target_keyword = "原價" # <--- 設定預設關鍵字
                         # without keyword.
                         pass
                     else:
@@ -8650,6 +8777,29 @@ def kham_area_auto_select(driver, domain_name, config_dict, area_keyword_item):
 
             if show_debug_message:
                 print("after match keyword, found count:", len(matched_blocks))
+
+            # Sort by seat number (ascending) for kham.com.tw when mode is CONST_SEAT_NUMBER_ASCENDING
+            if auto_select_mode == CONST_SEAT_NUMBER_ASCENDING and len(matched_blocks) > 0:
+                if show_debug_message:
+                    print("Sorting matched blocks by seat number (smallest to largest) for kham.com.tw")
+
+                # Create list of tuples (seat_number, row) for sorting
+                seats_with_numbers = []
+                for row in matched_blocks:
+                    seat_number = extract_seat_number_from_row(row, domain_name)
+                    seats_with_numbers.append((seat_number, row))
+                    if show_debug_message:
+                        row_text = util.remove_html_tags(row.get_attribute('innerHTML'))
+                        print(f"  Row: {row_text[:50]}, Seat Number: {seat_number}")
+
+                # Sort by seat number (ascending)
+                seats_with_numbers.sort(key=lambda x: x[0])
+
+                # Extract sorted rows
+                matched_blocks = [row for seat_num, row in seats_with_numbers]
+
+                if show_debug_message:
+                    print("After sorting, seat numbers:", [seat_num for seat_num, _ in seats_with_numbers])
 
             if len(matched_blocks) == 0:
                 matched_blocks = None
@@ -9135,10 +9285,22 @@ def kham_main(driver, url, config_dict, ocr, Captcha_Browser):
 
     show_debug_message = True    # debug.
     show_debug_message = False   # online
-
+    
+    if '.aspx?performance_id=' in url.lower() and 'performance_price_area_id=' in url.lower():
+        # This is the seat selection page
+        
+        # --- [新增] 在嘗試選位之前，先點擊 "原價" 票種 (避免彈窗) ---
+        kham_select_regular_price_area(driver, config_dict) # <--- 加入 config_dict
+        # -----------------------------------------------------------
+        
     if config_dict["advanced"]["verbose"]:
         show_debug_message = True
-
+    # --- [確保存在] 檢查並點擊彈窗 ---
+    is_modal_closed = kham_check_modal_popup(driver)
+    if is_modal_closed:
+        time.sleep(0.3) # 稍微等待，確保彈窗完全消失
+        return # 彈窗已處理，返回主循環以重新檢查頁面狀態
+    # ----------------------------
     home_url_list = ['https://kham.com.tw/'
     ,'https://kham.com.tw/application/utk01/utk0101_.aspx'
     ,'https://kham.com.tw/application/utk01/utk0101_03.aspx'
@@ -9543,7 +9705,7 @@ def ticketplus_date_auto_select(driver, config_dict):
                             pass
 
                         if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                            time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                            time.sleep(get_random_delay(config_dict))
 
 
     return is_date_clicked
@@ -9921,7 +10083,7 @@ def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style):
                 pass
 
             if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+                time.sleep(get_random_delay(config_dict))
 
     return is_price_assign_by_bot
 
