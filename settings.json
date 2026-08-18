@@ -1,5 +1,5 @@
 {
-    "homepage": "https://kham.com.tw/",
+    "homepage": "https://ticketplus.com.tw/",
     "browser": "chrome",
     "language": "\u7e41\u9ad4\u4e2d\u6587",
     "ticket_number": 2,
@@ -18,10 +18,10 @@
     },
     "area_auto_select": {
         "enable": true,
-        "mode": "from bottom to top",
+        "mode": "from top to bottom",
         "area_keyword": ""
     },
-    "keyword_exclude": "\"\u8f2a\u6905\",\"\u8eab\u969c\",\"\u8eab\u5fc3 \u969c\u7919\",\"Restricted View\",\"\u71c8\u67f1\u906e\u853d\",\"\u8996\u7dda\u4e0d\u5b8c\u6574\"",
+    "keyword_exclude": "\"\u8f2a\u6905\",\"\u8eab\u969c\",\"\u8eab\u5fc3 \u969c\u7919\",\"Restricted View\",\"\u71c8\u67f1\u906e\u853d\",\"\u8996\u7dda\u4e0d\u5b8c\u6574\",\"9430\",\"9380\",\"8880\"",
     "kktix": {
         "auto_press_next_step_button": true,
         "auto_fill_ticket_number": true,
@@ -79,7 +79,7 @@
         "headless": false,
         "verbose": false,
         "auto_guess_options": true,
-        "user_guess_string": "",
+        "user_guess_string": "\"523953\"",
         "remote_url": "\"http://127.0.0.1:16888/\"",
         "auto_reload_page_interval": 0.5,
         "auto_reload_overheat_count": 4,
@@ -88,7 +88,7 @@
         "proxy_server_port": "",
         "window_size": "960,1024",
         "idle_keyword": "\"0:49\"",
-        "resume_keyword": "\"59:58\"",
+        "resume_keyword": "\"00:00\"",
         "idle_keyword_second": "",
         "resume_keyword_second": ""
     }
