@@ -1,2 +1,7 @@
 # Maxbot runtime state files (contain personal order URLs)
 MAXBOT_*.txt
+webdriver/*/data/status.json
+
+# local run output
+*.log
+__pycache__/

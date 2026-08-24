@@ -1346,6 +1346,10 @@ def is_row_match_keyword(keyword_string, row_text):
 
 def reset_row_text_if_match_keyword_exclude(config_dict, row_text):
     area_keyword_exclude = config_dict["keyword_exclude"]
+    if len(area_keyword_exclude.strip()) == 0:
+        # empty exclude list means "exclude nothing" (is_row_match_keyword
+        # returns True on empty string, which would wrongly exclude every row).
+        return False
     return is_row_match_keyword(area_keyword_exclude, row_text)
 
 

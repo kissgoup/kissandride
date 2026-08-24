@@ -9667,6 +9667,9 @@ def ticketplus_date_auto_select(driver, config_dict):
     is_date_clicked = False
     if is_vue_ready:
         target_area = util.get_target_item_from_matched_list(matched_blocks, auto_select_mode)
+        # remember when the target session exists but its buy button is disabled
+        # (尚未開賣/未開放), so we can keep reloading to wait for the sale to open.
+        is_target_button_found_but_disabled = False
         if not target_area is None:
             target_button = None
             try:
@@ -9677,6 +9680,8 @@ def ticketplus_date_auto_select(driver, config_dict):
                             print("start to press button...")
                         target_button.click()
                         is_date_clicked = True
+                    else:
+                        is_target_button_found_but_disabled = True
                 else:
                     if show_debug_message:
                         print("target_button in target row is None.")
@@ -9692,20 +9697,32 @@ def ticketplus_date_auto_select(driver, config_dict):
                     except Exception as exc:
                         pass
 
-        # [PS]: current reload condition only when
+        # [PS]: reload the activity page when the target session is not buyable yet:
+        #   - no session row is left after filtering (all sold out / coming soon).
+        #   - the target session exists but its buy button is disabled (尚未開賣/未開放).
         if auto_reload_coming_soon_page_enable:
             if not is_date_clicked:
+                is_need_reload = False
                 if not formated_area_list is None:
                     if len(formated_area_list) == 0:
-                        # in fact, no need reload on /activity/ page, should reload in /order/ page.
-                        try:
-                            driver.refresh()
-                            time.sleep(0.3)
-                        except Exception as exc:
-                            pass
+                        is_need_reload = True
 
-                        if config_dict["advanced"]["auto_reload_page_interval"] > 0:
-                            time.sleep(get_random_delay(config_dict))
+                if not is_need_reload:
+                    if is_target_button_found_but_disabled:
+                        is_need_reload = True
+                        if show_debug_message:
+                            print("target buy button is disabled, reload to wait for sale.")
+
+                if is_need_reload:
+                    # in fact, no need reload on /activity/ page, should reload in /order/ page.
+                    try:
+                        driver.refresh()
+                        time.sleep(0.3)
+                    except Exception as exc:
+                        pass
+
+                    if config_dict["advanced"]["auto_reload_page_interval"] > 0:
+                        time.sleep(get_random_delay(config_dict))
 
 
     return is_date_clicked
@@ -10028,7 +10045,7 @@ def ticketplus_order_expansion_auto_select(driver, config_dict, area_keyword_ite
     return is_need_refresh, is_price_assign_by_bot, is_reset_query
 
 
-def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style):
+def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style, ticketplus_dict=None):
     show_debug_message = True       # debug.
     show_debug_message = False      # online
 
@@ -10073,6 +10090,13 @@ def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style):
             # empty keyword, match all.
             is_need_refresh, is_price_assign_by_bot, is_reset_query = ticketplus_order_expansion_auto_select(driver, config_dict, "", current_layout_style)
 
+        if is_need_refresh:
+            # PS: refreshing during queue/seat-arrangement sends the order
+            #     back to the end of the queue. Block it after recent submit.
+            if _refresh_blocked_by_queue(ticketplus_dict, time.time()):
+                if show_debug_message:
+                    print("skip refresh: recent submit, queue running.")
+                is_need_refresh = False
         if is_need_refresh:
             # vue mode, refresh need to check more conditions to check.
             print('start to refresh page.')
@@ -10197,6 +10221,106 @@ location.reload();
 
     return is_reloading
 
+CONST_TICKETPLUS_NEXT_PRESS_COOLDOWN = 3.0
+# PS: after submit, ticketplus shows queue/seat-arrangement spinner on the same
+#     /order/ url for seconds to minutes. Never refresh during that period,
+#     refreshing sends the order back to the end of the queue.
+CONST_TICKETPLUS_QUEUE_GUARD_SECONDS = 300.0
+CONST_TICKETPLUS_HEARTBEAT_INTERVAL = 10.0
+CONST_TICKETPLUS_HEARTBEAT_WINDOW = 900.0
+
+def _recent_submit_seconds(ticketplus_dict, now_time):
+    # seconds since last successful submit, or None when unknown / too old.
+    if ticketplus_dict is None:
+        return None
+    if not "last_next_press_time" in ticketplus_dict:
+        return None
+    elapsed = now_time - ticketplus_dict["last_next_press_time"]
+    if elapsed < 0 or elapsed >= CONST_TICKETPLUS_QUEUE_GUARD_SECONDS:
+        return None
+    return int(elapsed)
+
+def _queue_heartbeat_state(now_time, last_press_time, last_beat_time):
+    # decide whether it is time to print one queue-waiting heartbeat line.
+    elapsed = int(now_time - last_press_time)
+    if elapsed < 0 or elapsed >= CONST_TICKETPLUS_HEARTBEAT_WINDOW:
+        return False, elapsed
+    if now_time - last_beat_time < CONST_TICKETPLUS_HEARTBEAT_INTERVAL:
+        return False, elapsed
+    return True, elapsed
+
+def _refresh_blocked_by_queue(ticketplus_dict, now_time):
+    return not _recent_submit_seconds(ticketplus_dict, now_time) is None
+
+# PS: after submit (or while waiting to enter a hot event), ticketplus keeps the
+#     order DOM and shows a spinner text on top: 排隊購票中/系統安排座位/請別離開頁面.
+#     Touching anything then - especially re-pressing nextBtn - sends the order
+#     back to the end of the queue (observed 2026-08-24).
+CONST_TICKETPLUS_QUEUE_TEXT_KEYWORDS = ["排隊購票中", "系統安排座位", "請別離開頁面"]
+
+# PS: right after a submit the spinner text can vanish before navigation to
+#     /confirmSeat/ completes, leaving a stale enabled nextBtn behind. Do not
+#     auto-press it again within this window (observed 2026-08-24).
+CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS = 30.0
+
+def _repress_suppressed(ticketplus_dict, now_time):
+    if ticketplus_dict is None:
+        return False
+    if not "last_next_press_time" in ticketplus_dict:
+        return False
+    elapsed = now_time - ticketplus_dict["last_next_press_time"]
+    return 0 <= elapsed < CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS
+
+def _text_indicates_ticketplus_queue(text):
+    # pure decision: does the page text contain the queue/seat-arrangement words?
+    if not text:
+        return False
+    for keyword in CONST_TICKETPLUS_QUEUE_TEXT_KEYWORDS:
+        if keyword in text:
+            return True
+    return False
+
+def ticketplus_queue_in_progress(driver):
+    try:
+        body_element = driver.find_element(By.TAG_NAME, "body")
+        page_text = body_element.text
+    except Exception:
+        return False
+    return _text_indicates_ticketplus_queue(page_text)
+
+def ticketplus_press_next_btn(driver):
+    # PS: two layout styles of next button.
+    is_form_sumbited = press_button(driver, By.CSS_SELECTOR, "div.order-footer > div.container > div.row > div > button.nextBtn")
+    if not is_form_sumbited:
+        # for style_1
+        is_form_sumbited = press_button(driver, By.CSS_SELECTOR, "div.order-footer > div.container > div.row > div > div.row > div > button.nextBtn")
+    return is_form_sumbited
+
+def ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict=None):
+    # when captcha input exist and ocr enabled, let the OCR chain fill the
+    # answer and submit; otherwise press next button directly.
+    has_captcha_input = False
+    if config_dict["ocr_captcha"]["enable"]:
+        try:
+            my_css_selector = 'input[placeholder="請輸入驗證碼"]'
+            driver.find_element(By.CSS_SELECTOR, my_css_selector)
+            has_captcha_input = True
+        except Exception as exc:
+            pass
+
+    if has_captcha_input:
+        is_form_sumbited = ticketplus_order_ocr(driver, config_dict, ocr, Captcha_Browser)
+    else:
+        is_form_sumbited = ticketplus_press_next_btn(driver)
+        if is_form_sumbited:
+            time.sleep(0.5)
+
+    # remember submit time: queue/seat-arrangement starts now. Used by the
+    # waiting heartbeat message and the refresh-guard.
+    if is_form_sumbited and not ticketplus_dict is None:
+        ticketplus_dict["last_next_press_time"] = time.time()
+    return is_form_sumbited
+
 def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict):
     show_debug_message = True       # debug.
     show_debug_message = False      # online
@@ -10204,8 +10328,32 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
     if config_dict["advanced"]["verbose"]:
         show_debug_message = True
 
+    # respect area_auto_select switch: no auto area/ticket/submit when disabled.
+    if not config_dict["area_auto_select"]["enable"]:
+        return ticketplus_dict
+
+    # queue heartbeat: after a successful submit, the seat-arrangement spinner
+    # runs on this same /order/ url for seconds to minutes. Keep reporting so
+    # the user knows it is queueing, not stuck.
+    now_time = time.time()
+    do_heartbeat = False
+    queue_elapsed = 0
+    if "last_next_press_time" in ticketplus_dict:
+        do_heartbeat, queue_elapsed = _queue_heartbeat_state(now_time, ticketplus_dict["last_next_press_time"], ticketplus_dict.get("last_queue_beat", 0))
+    if do_heartbeat:
+        print("[排隊守候] 已送出 %d 秒，排隊/劃位進行中，請勿重新整理..." % queue_elapsed)
+        ticketplus_dict["last_queue_beat"] = now_time
+
+    # queue/seat-arrangement spinner on page: passively wait. Re-selecting an
+    # area or re-pressing nextBtn here resets the queue slot.
+    if ticketplus_queue_in_progress(driver):
+        if show_debug_message:
+            print("queue spinner on page, passively waiting.")
+        return ticketplus_dict
+
     next_step_button = None
-    # PS: only button disabled = True to continue.
+    # PS: button disabled means form not ready yet, need to fill;
+    #     button enabled means form ready, go to submit directly.
     is_button_disabled = False
     current_layout_style = 0
     try:
@@ -10241,7 +10389,7 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
     is_captcha_sent = False
     if is_button_disabled:
         is_price_assign_by_bot = False
-        is_price_assign_by_bot = ticketplus_order_expansion_panel(driver, config_dict, current_layout_style)
+        is_price_assign_by_bot = ticketplus_order_expansion_panel(driver, config_dict, current_layout_style, ticketplus_dict)
 
         if not is_price_assign_by_bot:
             is_price_assign_by_bot = ticketplus_assign_ticket_number(driver, config_dict)
@@ -10252,17 +10400,21 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
         if is_price_assign_by_bot:
             is_answer_sent, ticketplus_dict["fail_list"], is_question_popup = ticketplus_order_exclusive_code(driver, config_dict, ticketplus_dict["fail_list"])
 
-            auto_submit = True
-            if auto_submit:
-                my_css_selector = "div.order-footer > div.container > div.row > div > button.nextBtn"
-                is_form_sumbited = press_button(driver, By.CSS_SELECTOR, my_css_selector)
-                if not is_form_sumbited:
-                    # for style_1
-                    my_css_selector = "div.order-footer > div.container > div.row > div > div.row > div > button.nextBtn"
-                    is_form_sumbited = press_button(driver, By.CSS_SELECTOR, my_css_selector)
-
-                if is_form_sumbited:
-                    time.sleep(0.5)
+            is_captcha_sent = ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
+            print("is_captcha_sent", is_captcha_sent)
+    else:
+        if not next_step_button is None:
+            # form ready on arrival (e.g. selection kept after reload):
+            # submit it, but not twice within cooldown to avoid double press
+            # before page navigation.
+            last_press_time = 0
+            if "last_next_press_time" in ticketplus_dict:
+                last_press_time = ticketplus_dict["last_next_press_time"]
+            now_time = time.time()
+            if now_time - last_press_time >= CONST_TICKETPLUS_NEXT_PRESS_COOLDOWN \
+                and not _repress_suppressed(ticketplus_dict, now_time):
+                print("next step button ready, start to submit.")
+                is_form_sumbited = ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
                 print("is_form_sumbited", is_form_sumbited)
 
     return ticketplus_dict
@@ -10779,16 +10931,22 @@ def ticketplus_ticket_agree(driver, config_dict):
     if config_dict["advanced"]["verbose"]:
         show_debug_message = True
 
-    agree_checkbox = None
+    agree_checkboxes = []
     try:
         my_css_selector = 'div.v-input__slot > div > input[type="checkbox"]'
-        agree_checkbox = driver.find_element(By.CSS_SELECTOR, my_css_selector)
+        agree_checkboxes = driver.find_elements(By.CSS_SELECTOR, my_css_selector)
     except Exception as exc:
         if show_debug_message:
             print("find ticketplus agree checkbox fail")
         pass
 
-    is_finish_checkbox_click = force_check_checkbox(driver, agree_checkbox)
+    # scan and check every agree checkbox, not only the first one.
+    is_finish_checkbox_click = len(agree_checkboxes) > 0
+    for agree_checkbox in agree_checkboxes:
+        if not force_check_checkbox(driver, agree_checkbox):
+            is_finish_checkbox_click = False
+            if show_debug_message:
+                print("check one of ticketplus agree checkbox fail")
 
     return is_finish_checkbox_click
 
