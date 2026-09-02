@@ -1,0 +1,69 @@
+===== login block + IMG_THUMB area (312700-313350)
+/seats/seaticon_choosed.png" alt=""> 已被選擇</span>
+			<span><img src="https://imgs2.utiki.com.tw/Data/KHAM_RWD/images/seats/seaticon_cart2.png" alt=""> 已加入購物車</span>
+		</div>
+	</div> 
+	<!--登入-->      
+	<div id="TR_LOGIN_BLOCK" class="sidecolumn"> 
+		<div style="text-align: center; margin-bottom: 40px;">
+			<span class="tip">*下方黑色區塊為您目前選擇的票區</span>
+			<a href="javascript:;" class="changeArea">
+				<img id="IMG_THUMB" title="綠色區塊代表您目前所選擇的票區" class="change" onclick="showPic();document.body.style.overflow='auto';" src="https://imgs2.utiki.com.tw/data/KHAM/Images/Performances/P1D430L4/frontend/P_P1DA05FM.png" width="200" height="204"><br>
+			</a>
+		
+
+===== seatmap / onclick handlers (313350-314400)
+	<a href="javascript:;"><button class="red change" onclick="showPic();return false;">切換票區</button></a> 
+		</div>      
+		<div class="subtitle"><span class="step2">STEP.2 請登入帳號及密碼</span></div>
+		<table border="0" cellspacing="0" cellpadding="0" class="step2Login">
+		<tbody>  
+			<tr id="LOGIN_BLOCK2">
+	<td colspan="2"><input name="ctl00$ContentPlaceHolder1$LOGIN_ID" type="text" maxlength="20" id="LOGIN_ID" autocomplete="Off" placeholder="帳號"></td>
+</tr>
+
+			<tr id="LOGIN_BLOCK3">
+	<td colspan="2">
+					<input name="ctl00$ContentPlaceHolder1$LOGIN_PWD" type="password" maxlength="15" id="LOGIN_PWD" autocomplete="Off" placeholder="密碼">
+					<button class="eyeBTN" id="EYE" onclick="showhidePW('LOGIN_PWD','EYE');return false;"></button>
+				</td>
+</tr>
+
+			<tr id="LOGIN_BLOCK6">
+	<td width="50%"><input name="ctl00$ContentPlaceHolder1$CHK" type="text" maxlength="4" id="CHK" placeholder="驗證碼"></td>
+	<td>
+					<div class="captcha">
+						<img id="chk_pic" style="position: relative; top: 2px" src="/pic.aspx?TYPE=UTK0205">
+						<a href="javascr
+
+===== addcart #1 (264600-265100)
+dth:100%}.sidecolumn{padding:20px 0}.choiceINFO{width:calc(100% - 40px)}.sidecolumn>div:first-child{display:flex;flex-direction:column;align-items:center}.changeArea{width:60%}#addcart button,.step2Login{width:calc(100% - 40px);margin:0 20px}}.chooseSeatMAP .eventTABLE td{text-align:center;border-bottom:1px solid #aaa}.step4 .sidecolumn{padding:0}.step4 .chooseSeatMAP{padding-right:20px}</style><script type="text/javascript">function c(t){_a>_b||(_a++,alert(t))}function page_init(){var t=[];t.pu
+
+===== addShoppingCart #1 (265900-266400)
+.addEventListener("touchstart",onTouchStart_0205,!1),$("#TBL")[0].addEventListener("touchmove",onTouchMove_0205,!1),document.forms[0].onsubmit=function(t){addShoppingCart(),window.event?t.returnValue=!1:t.preventDefault()}}function onTouchStart_0205(t){lastDistance=0}function onTouchMove_0205(t){if(2==t.touches.length){t.preventDefault();var e=GetDistance_0205(t.touches[0].pageX,t.touches[0].pageY,t.touches[1].pageX,t.touches[1].pageY);if(lastDistance>0){var a=.005*(e-lastDistance);zoom(a)}lastD
+
+===== addShoppingCart #2 (267700-268300)
+xt(e.I)}})}}function checkPi(t){""!=lastChoose&&lastChoose.split("-")[lastChoose.split("-").length-2]!=t.split("-")[t.split("-").length-2]&&alert1("提醒您！您與稍早選的座位是不同排！您上次選的座位是第 "+lastChoose.split("-")[t.split("-").length-2]),lastChoose=t}function addShoppingCart(){if(0==_ul&&""!=_DV&&"IAMAPP"==_DV){var t=top.location.href;return-1!=self.location.href.indexOf("?")?self.location.href="&/APPACTION?ACTION_LOGIN&BACKURL="+encodeURI(t):self.location.href="?APPACTION?ACTION_LOGIN&BACKURL="+encodeURI(t),!1}if(!isClick){var e;new StringBuilder;if(0==_ul){if(""==$("#LOGIN_ID").val())return alert1("【帳號】必須填
+
+===== addcart near end (314900-315600)
+7Jbg6NbrVSvf127fhqW0o5fLjB%2fMpsdY6%2bQbCblCFRu2an%2bA0AE5oAQmRILyaAP8mY7OQnJd5zc38B8vO%2fFUqxAL5osgLvpw3%2br0BnZwvRSl6pPT1iHRV3qGdpRTzdg%3d"><span class="icon">+</span>加入會員</a></td>
+</tr>
+
+		</tbody>
+		</table>
+		<a href="javascript:;" id="addcart"><button class="red" style="padding: 8px 0; margin-top: 30px;" onclick="addShoppingCart();return false;">加入購物車</button></a>
+	</div>         
+</div>								
+        
+<script>
+function Send(page_name, performance_id, area_id, group_id)
+{
+	if (!isClick)
+	{
+		showProcess();
+		
+			top.location.href = 'UTK' + page_name + '_.aspx?PERFORMANCE_ID=' + performance_id + '&GROUP_ID=' + group_id + '&PERFORMANCE_PRICE_AREA_ID=' + area_id;
+		
+	}
+	isClick	=	true;
+

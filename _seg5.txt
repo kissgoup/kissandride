@@ -1,0 +1,9 @@
+alert1 at 238375:
+function alert1(e,t){void 0===t&&(t=null),$("#dialog-message").html("<br>"+e),setTimeout(function(){$("#dialog-message").dialog({closeOnEscape:!1,open:function(){$(".ui-dialog-titlebar-close").show()},modal:!0,buttons:{Ok:function(){$(this).dialog("close")}},close:function(e,n){null!=t&&t()}})},100)}function confirm1(e,t,n){"undefined"==typeof action&&(action=null),$("#dialog-message").html("<br>"
+currType decl ctx (271613):
+,2.1,3.1,4\t左:2:2,0.2,1.2,2.2,3.2,4\t右:3:3,0.3,1.3,2.3,3.3,4",seats={},toObj={"上":"up","右":"right","下":"down","左":"left"},statAry=["empty ","people ","empty selected ","booked ","SeatAddCart "],lastChoose="",cacheUTK0205Key1="_UTK0205_closeRemind_",zoomSize=0,currType="",currTypeName="";</script>
+
+	<script>
+	var _iO = 0;
+	var _iL = 0;
+	</

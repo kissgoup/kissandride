@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import random
+import re
 import ssl
 import subprocess
 import sys
@@ -47,7 +48,7 @@ except Exception as exc:
     print(exc)
     pass
 
-CONST_APP_VERSION = "MaxBot (2025.11.28)"
+CONST_APP_VERSION = "MaxBot (2026.09.02)"
 
 CONST_MAXBOT_ANSWER_ONLINE_FILE = "MAXBOT_ONLINE_ANSWER.txt"
 CONST_MAXBOT_CONFIG_FILE = "settings.json"
@@ -110,6 +111,13 @@ CONST_RANDOM = "random"
 CONST_SEAT_NUMBER_ASCENDING = "seat number ascending"  # 優先選擇座位號碼從小到大
 
 CONT_STRING_1_SEATS_REMAINING = ['@1 seat(s) remaining','剩餘 1@','@1 席残り']
+
+# 各語言「剩餘 N」的正規表示式（用於 parse_tixcraft_area_remaining）。
+# 注意：不包含日文，因為目前搶票目標只有中文/英文介面的拓元場次。
+CONT_STRING_SEATS_REMAINING_REGEX_LIST = [
+    re.compile(r'剩餘\s*(\d+)'),                       # 中文：剩餘 35
+    re.compile(r'(\d+)\s*seats?\(s\)?\s*remaining', re.I),   # 英文：18 seat(s) remaining
+]
 
 CONST_OCR_CAPTCH_IMAGE_SOURCE_NON_BROWSER = "NonBrowser"
 CONST_OCR_CAPTCH_IMAGE_SOURCE_CANVAS = "canvas"
@@ -1358,6 +1366,22 @@ def ticketmaster_date_auto_select(driver, url, config_dict, domain_name):
 #   is_need_refresh
 #   matched_blocks
 # PS: matched_blocks will be None, if length equals zero.
+def parse_tixcraft_area_remaining(font_el_text):
+    """從區域 <font> 標記文字解析剩餘座位數。
+
+    回傳 int（剩餘張數）或 None（熱賣中等未顯示張數的狀態）。
+    例：'剩餘 35' → 35, '18 seat(s) remaining' → 18, '熱賣中' → None。
+    """
+    remaining = None
+    if font_el_text:
+        for rx in CONT_STRING_SEATS_REMAINING_REGEX_LIST:
+            m = rx.search(font_el_text)
+            if m:
+                remaining = int(m.group(1))
+                break
+    return remaining
+
+
 def get_tixcraft_target_area(el, config_dict, area_keyword_item):
     show_debug_message = True       # debug.
     show_debug_message = False      # online
@@ -1429,6 +1453,8 @@ def get_tixcraft_target_area(el, config_dict, area_keyword_item):
 
                 if is_append_this_row:
                     if config_dict["ticket_number"] > 1:
+                        # 買多張時：排除剩餘張數不足的區域（例：買 4 張、剩餘 3 的區），
+                        # 避免點進去後卡死在選票數頁。熱賣中（無剩餘張數）視為有效目標保留。
                         area_item_font_el = None
                         try:
                             #print('try to find font tag at row:', row_text)
@@ -1437,18 +1463,17 @@ def get_tixcraft_target_area(el, config_dict, area_keyword_item):
                                 font_el_text = area_item_font_el.text
                                 if font_el_text is None:
                                     font_el_text = ""
-                                font_el_text = "@%s@" % (font_el_text)
+                                area_remaining = parse_tixcraft_area_remaining(font_el_text)
                                 if show_debug_message:
                                     print('font tag text:', font_el_text)
-                                    pass
-                                for check_item in CONT_STRING_1_SEATS_REMAINING:
-                                    if check_item in font_el_text:
+                                    print('area_remaining:', area_remaining)
+                                if not area_remaining is None:
+                                    if area_remaining < config_dict["ticket_number"]:
                                         if show_debug_message:
-                                            print("match pass 1 seats remaining 1 full text:", row_text)
-                                            print("match pass 1 seats remaining 2 font text:", font_el_text)
+                                            print("area remaining < ticket_number, skip area:", row_text)
                                         is_append_this_row = False
                             else:
-                                #print("row withou font tag.")
+                                #print("row without font tag.")
                                 pass
                         except Exception as exc:
                             #print("find font text in a tag fail:", exc)
@@ -8419,7 +8444,17 @@ def hkam_date_auto_select(driver, domain_name, config_dict):
                     break
 
                 if len(row_text) > 0:
-                    if util.reset_row_text_if_match_keyword_exclude(config_dict, row_text):
+                    # kham/ticket 第 1 步的列文字同時列出全部票價（800、…、4680），
+                    # 排除字串若含票價關鍵字（如 "4680"）會用子字串比對把整列誤殺。
+                    # 比對排除時先抽掉票價欄，價格類排除留到第 2 步選區域再比。
+                    exclude_text = row_text
+                    if "<td" in row_html:
+                        _tds = row_html.split("<td")
+                        if len(_tds) > 4:
+                            exclude_text = util.remove_html_tags(
+                                "<td".join([_tds[0], _tds[1], _tds[2], _tds[4]])
+                            )
+                    if util.reset_row_text_if_match_keyword_exclude(config_dict, exclude_text):
                         row_text = ""
 
                 if len(row_text) > 0:
@@ -8513,6 +8548,16 @@ def hkam_date_auto_select(driver, domain_name, config_dict):
             pass
 
         if not el_btn is None:
+            # uc.Chrome：原生 click 可能觸發 onclick 但導航沒發生
+            # （kham 的 <a href="javascript:;"> 包按鈕會吃掉 top.location.href）。
+            # click 後驗證 URL 有無前進，沒變就回退 JS click。
+            url_before_click = ""
+            try:
+                url_before_click = driver.current_url
+            except Exception as exc:
+                pass
+
+            is_js_clicked = False
             try:
                 if el_btn.is_enabled():
                     el_btn.click()
@@ -8523,9 +8568,25 @@ def hkam_date_auto_select(driver, domain_name, config_dict):
                 try:
                     print("force to click by js.")
                     driver.execute_script("arguments[0].click();", el_btn)
+                    is_js_clicked = True
                     is_button_clicked = True
                 except Exception as exc:
                     pass
+
+            if is_button_clicked and not is_js_clicked and len(url_before_click) > 0:
+                if 'udnfunlife' not in domain_name:  # udn 是 fetch 流程，不走 URL 導航
+                    try:
+                        current_url = url_before_click
+                        for _sleep_i in range(5):
+                            time.sleep(0.2)
+                            current_url = driver.current_url
+                            if current_url != url_before_click:
+                                break
+                        if current_url == url_before_click:
+                            print("native click didn't navigate, force click by js.")
+                            driver.execute_script("arguments[0].click();", el_btn)
+                    except Exception as exc:
+                        pass
         is_date_assign_by_bot = is_button_clicked
     else:
         # no target to click.
@@ -8561,6 +8622,46 @@ def kham_product(driver, domain_name, config_dict):
     return is_date_assign_by_bot
     
 # 請確保這個函數定義前面**沒有任何空格或 Tab**
+def kham_get_curr_type(driver):
+    """讀取 UTK0205 頁面的 currType 全域（由票別按鈕的 setType() 設定）。
+    未定義或尚未選票別時回傳 ""。"""
+    curr_type = ""
+    try:
+        curr_type = driver.execute_script("return (typeof currType!=='undefined') ? currType : '';") or ""
+    except Exception as exc:
+        pass
+    return curr_type
+
+def kham_find_adjacent_empty_seats(driver, needed_count):
+    """在 table#TBL 各列（<tr>）中找出連續 needed_count 個空位（td.empty）。
+    同一列 = 同一排，DOM 相鄰 = 實際相鄰座位（奇偶分區也適用）。
+    回傳連續空位 list；各列都不足時回傳 []；座位表結構讀不到時回傳 None。"""
+    try:
+        row_list = driver.find_elements(By.CSS_SELECTOR, "table#TBL > tbody > tr")
+    except Exception as exc:
+        return None
+    if len(row_list) == 0:
+        return None
+
+    for row in row_list:
+        try:
+            cell_list = row.find_elements(By.CSS_SELECTOR, "td")
+        except Exception as exc:
+            continue
+        seat_run = []
+        for cell in cell_list:
+            try:
+                cell_class = cell.get_attribute('class') or ""
+            except Exception as exc:
+                cell_class = ""
+            if cell_class.startswith("empty") and "selected" not in cell_class:
+                seat_run.append(cell)
+                if len(seat_run) >= needed_count:
+                    return seat_run[:needed_count]
+            else:
+                seat_run = []
+    return []
+
 def kham_select_regular_price_area(driver, config_dict):
     is_clicked = False
     # 使用 config_dict["advanced"]["verbose"] 判斷是否顯示 debug 訊息
@@ -8570,25 +8671,194 @@ def kham_select_regular_price_area(driver, config_dict):
 
     # 尋找包含 '原價' 文本，且位於 <div class="ticket"> 內的 <button> 元素
     xpath_selector = "//div[@class='ticket']/button[contains(., '原價')]"
-    
+
+    regular_price_btn = None
     try:
         # 使用 WebDriverWait 等待按鈕出現且可點擊 (最多等待 5 秒)
         regular_price_btn = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.XPATH, xpath_selector))
         )
-        
+
         if regular_price_btn.is_enabled():
             regular_price_btn.click()
             if show_debug_message:
                 print("Successfully clicked the '原價' ticket price button.")
             is_clicked = True
             time.sleep(random.uniform(0.3, 0.7)) # 點擊後短暫隨機延遲，讓頁面狀態更新
-            
+
     except Exception as exc:
         if show_debug_message:
              pass
-        
+
+    # uc.Chrome 在 kham 頁面原生 click 可能靜默失效（同 #CHK send_keys 問題）：
+    # setType 沒生效（currType 仍空）就回退 JS click，否則點座位會彈
+    # 「請先選擇【票別】！」對話框無限循環。
+    if not regular_price_btn is None:
+        if kham_get_curr_type(driver) == "":
+            try:
+                driver.execute_script("arguments[0].click();", regular_price_btn)
+                is_clicked = True
+            except Exception as exc:
+                if show_debug_message:
+                    print("force click 原價 by js fail")
+                pass
+            if show_debug_message and kham_get_curr_type(driver) != "":
+                print("native click 原價 fail, force click by js.")
+
     return is_clicked
+
+def kham_get_selected_seat_count(driver):
+    """UTK0205 座位表頁：讀取 #SELECT_COUNT（已選座位數）。
+    頁面沒有座位表（非 UTK0205 座位頁）時回傳 None。"""
+    seat_count = None
+    try:
+        el_count = driver.find_element(By.CSS_SELECTOR, '#SELECT_COUNT')
+        seat_count = int(el_count.text.strip())
+    except Exception as exc:
+        pass
+    return seat_count
+
+def kham_seat_auto_select(driver, config_dict):
+    """UTK0205 座位表頁：點完「原價」票別後，自動點擊座位表空位，
+    直到 #SELECT_COUNT 達到 ticket_number。
+    回傳 True（已選足）/ False（空位不足）/ None（此頁沒有座位表）。"""
+    show_debug_message = config_dict["advanced"]["verbose"]
+
+    target_count = int(config_dict["ticket_number"])
+    current_count = kham_get_selected_seat_count(driver)
+    if current_count is None:
+        return None
+
+    if current_count >= target_count:
+        return True
+
+    # 票別（setType/currType）尚未生效時不可點座位，否則真頁會彈
+    # 「請先選擇【票別】！」對話框（主循環會先重試 kham_select_regular_price_area）。
+    if kham_get_curr_type(driver) == "":
+        return False
+
+    # 座位品質：advanced.disable_adjacent_seat = True 表示「允許不連續座位」。
+    # 未啟用時要選連續座位：優先在同一列（同排）找連續空位一次選滿。
+    allow_non_adjacent = config_dict["advanced"].get("disable_adjacent_seat", False)
+
+    use_adjacent_search = (not allow_non_adjacent) and current_count == 0
+    if use_adjacent_search:
+        seat_run = kham_find_adjacent_empty_seats(driver, target_count)
+        if not seat_run is None:
+            if len(seat_run) == 0:
+                # 各列都沒有足夠連續空位：遵守設定，本輪不選位（等主循環再試）。
+                if show_debug_message:
+                    print("kham seat: no adjacent empty seats available.")
+                return False
+            for seat in seat_run:
+                try:
+                    # 座位的 jQuery click handler 不涉導航，直接以 JS click 觸發。
+                    driver.execute_script("arguments[0].click();", seat)
+                except Exception as exc:
+                    continue
+            use_adjacent_search = True
+        else:
+            # 座位表結構讀不到（非標準頁），退回逐一選位以免卡死。
+            use_adjacent_search = False
+
+    if not use_adjacent_search:
+        # 空位：class 以 "empty" 開頭且非 "empty selected"（已選）；
+        # "people"/"booked" 為已售，XPath 已排除。
+        try:
+            seat_list = driver.find_elements(By.XPATH,
+                "//table[@id='TBL']//td[starts-with(@class,'empty') and not(contains(@class,'selected'))]")
+        except Exception as exc:
+            seat_list = []
+
+        for seat in seat_list:
+            if current_count >= target_count:
+                break
+            try:
+                # 點擊前再確認 class，避免 toggle 到已選/已售座位。
+                seat_class = seat.get_attribute('class') or ""
+                if not seat_class.startswith("empty"):
+                    continue
+                if "selected" in seat_class:
+                    continue
+                # 座位的 jQuery click handler 不涉導航，直接以 JS click 觸發。
+                driver.execute_script("arguments[0].click();", seat)
+                current_count += 1
+            except Exception as exc:
+                continue
+
+    # 以頁面計數為準；若有靜默失敗，主循環下一輪會自動補點。
+    verified_count = kham_get_selected_seat_count(driver)
+    if not verified_count is None:
+        current_count = verified_count
+
+    if show_debug_message:
+        print("kham seat selected:", current_count, "/", target_count)
+
+    return current_count >= target_count
+
+def kham_keyin_seat_field(driver, my_css_selector, value):
+    """UTK0205 登入區單欄位填寫。uc.Chrome 在 kham 頁面 send_keys 會靜默失效
+    （同 #CHK 驗證碼欄），故 send_keys 後驗證 value，失敗回退 JS 設值。"""
+    try:
+        el_field = driver.find_element(By.CSS_SELECTOR, my_css_selector)
+    except Exception as exc:
+        return False
+
+    try:
+        inputed_value = el_field.get_attribute('value') or ""
+    except Exception as exc:
+        return False
+
+    if inputed_value == value:
+        return True
+    if len(inputed_value) > 0:
+        return False  # 已有其他內容（可能使用者自行輸入），不覆寫。
+
+    try:
+        el_field.clear()
+        el_field.send_keys(value)
+    except Exception as exc:
+        pass
+
+    actual_value = ""
+    try:
+        actual_value = el_field.get_attribute('value') or ""
+    except Exception as exc:
+        pass
+    if actual_value != value:
+        try:
+            driver.execute_script(
+                """
+                var el = arguments[0];
+                var v = arguments[1];
+                el.value = v;
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                """,
+                el_field, value)
+        except Exception as exc:
+            return False
+
+    return True
+
+def kham_keyin_seat_login(driver, config_dict):
+    """UTK0205 座位表頁的登入區（#LOGIN_ID / #LOGIN_PWD）填寫。
+    未登入時 addShoppingCart 會擋「【帳號】必須填寫」，需先填好。
+    欄位不存在（已登入狀態）時回傳 False。"""
+    kham_account = config_dict["advanced"]["kham_account"]
+    kham_password = config_dict["advanced"]["kham_password_plaintext"].strip()
+    if kham_password == "":
+        kham_password = util.decryptMe(config_dict["advanced"]["kham_password"])
+
+    is_account_filled = True
+    if len(kham_account) > 0:
+        is_account_filled = kham_keyin_seat_field(driver, '#LOGIN_ID', kham_account)
+
+    is_password_filled = True
+    if len(kham_password) > 0:
+        is_password_filled = kham_keyin_seat_field(driver, '#LOGIN_PWD', kham_password)
+
+    return is_account_filled and is_password_filled
 
 def extract_seat_number_from_row(row, domain_name):
     """Extract seat number from kham/ticket row for sorting.
@@ -9029,26 +9299,24 @@ def kham_performance(driver, config_dict, ocr, Captcha_Browser, domain_name, mod
 def kham_keyin_captcha_code(driver, answer = "", auto_submit = False):
     is_verifyCode_editing = False
 
+    # 真實 kham step-3 DOM（UTK0205_.aspx）的驗證碼欄：
+    #   <input name="ctl00$ContentPlaceHolder1$CHK" type="text" maxlength="4"
+    #          id="CHK" placeholder="驗證碼">     ← value 為空，所以 value= 選擇器無效
     form_verifyCode = None
-    try:
-        my_css_selector = 'input[value="驗證碼"]'
-        form_verifyCode = driver.find_element(By.CSS_SELECTOR, my_css_selector)
-    except Exception as exc:
-        print("find blockLogin input fail")
+    for my_css_selector in [
+            'input#CHK',
+            'input[placeholder="驗證碼"]',
+            'input[type="text"][maxlength="4"]',
+            'input[value="驗證碼"]',  # legacy: 有些站 value 本身就是浮水印
+    ]:
         try:
-            my_css_selector = 'input[placeholder="驗證碼"]'
             form_verifyCode = driver.find_element(By.CSS_SELECTOR, my_css_selector)
+            break
         except Exception as exc:
-            try:
-                my_css_selector = 'input[placeholder="請輸入圖片上符號"]'
-                form_verifyCode = driver.find_element(By.CSS_SELECTOR, my_css_selector)
-            except Exception as exc:
-                try:
-                    my_css_selector = 'input[type="text"][maxlength="4"]'
-                    form_verifyCode = driver.find_element(By.CSS_SELECTOR, my_css_selector)
-                except Exception as exc:
-                    pass
+            continue
 
+    if form_verifyCode is None:
+        print("find blockLogin input fail")
 
     is_start_to_input_answer = False
     if not form_verifyCode is None:
@@ -9090,6 +9358,28 @@ def kham_keyin_captcha_code(driver, answer = "", auto_submit = False):
             form_verifyCode.send_keys(answer)
         except Exception as exc:
             print("send_keys ocr answer fail:", answer)
+
+        # uc.Chrome 在 kham 頁面 send_keys 會靜默失效：鍵盤事件送不進頁面
+        # （document 層 keydown/input 都偵測不到），不拋例外，value 保持空。
+        # 驗證一下；沒填入就回退用 JS 直接設值 + 觸發 input/change。
+        actual_value = ""
+        try:
+            actual_value = form_verifyCode.get_attribute('value') or ""
+        except Exception as exc:
+            pass
+        if actual_value != answer:
+            try:
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    var v = arguments[1];
+                    el.value = v;
+                    el.dispatchEvent(new Event('input', {bubbles:true}));
+                    el.dispatchEvent(new Event('change', {bubbles:true}));
+                    """,
+                    form_verifyCode, answer)
+            except Exception as exc:
+                print("js set verify code fail:", answer)
 
     return is_verifyCode_editing
 
@@ -9301,6 +9591,14 @@ def kham_main(driver, url, config_dict, ocr, Captcha_Browser):
         time.sleep(0.3) # 稍微等待，確保彈窗完全消失
         return # 彈窗已處理，返回主循環以重新檢查頁面狀態
     # ----------------------------
+
+    # --- [新增] 座位表頁：自動點選空位 + 填寫登入區 ---
+    # 點完「原價」票別後，必須真的點擊座位表（table#TBL td.empty），
+    # addShoppingCart 才不會擋「請選擇【座位】！」。
+    if '.aspx?performance_id=' in url.lower() and 'performance_price_area_id=' in url.lower():
+        kham_seat_auto_select(driver, config_dict)
+        kham_keyin_seat_login(driver, config_dict)
+    # ----------------------------
     home_url_list = ['https://kham.com.tw/'
     ,'https://kham.com.tw/application/utk01/utk0101_.aspx'
     ,'https://kham.com.tw/application/utk01/utk0101_03.aspx'
@@ -9498,10 +9796,15 @@ def kham_main(driver, url, config_dict, ocr, Captcha_Browser):
 
                 if "ticket.com.tw" in url:
                     select_query = 'div.qty-select input[type="text"]'
+                    is_ticket_number_assigned = assign_text(driver, By.CSS_SELECTOR, select_query, str(config_dict["ticket_number"]), overwrite_when="0")
                 else:
-                    # kham
-                    select_query = '#AMOUNT'
-                is_ticket_number_assigned = assign_text(driver, By.CSS_SELECTOR, select_query, str(config_dict["ticket_number"]), overwrite_when="0")
+                    # kham 座位表頁（UTK0205）沒有 #AMOUNT，改以 #SELECT_COUNT
+                    # 判斷座位是否已選足；舊版自動配位頁仍走 #AMOUNT。
+                    seat_count = kham_get_selected_seat_count(driver)
+                    if seat_count is None:
+                        is_ticket_number_assigned = assign_text(driver, By.CSS_SELECTOR, '#AMOUNT', str(config_dict["ticket_number"]), overwrite_when="0")
+                    else:
+                        is_ticket_number_assigned = seat_count >= config_dict["ticket_number"]
 
                 if is_ticket_number_assigned:
                     if is_captcha_sent:
@@ -9574,6 +9877,17 @@ def ticketplus_date_auto_select(driver, config_dict):
             if area_list_count == 0:
                 print("empty date item, need retry.")
                 time.sleep(0.2)
+                # 2026-09-02 probe: some renders keep div.sesstion-item and its
+                # buy button but the #buyTicket-scoped query still returns 0 rows
+                # (container dropped or extra wrapper). Widen the query step by
+                # step; the buy button is a descendant in every tier.
+                date_row_css_selector_list = ['div.sesstion-item > div.row', 'div.sesstion-item']
+                for my_css_selector in date_row_css_selector_list:
+                    area_list = driver.find_elements(By.CSS_SELECTOR, my_css_selector)
+                    area_list_count = len(area_list)
+                    if area_list_count > 0:
+                        print("date item found by fallback selector:", my_css_selector)
+                        break
     except Exception as exc:
         print("find #buyTicket fail")
 
