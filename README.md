@@ -1,22 +1,22 @@
-# 高鐵送機
+# kissandride 高鐵訂位機器人
 
 ## 總覽
 
-MaxBot 是一個開放原始碼的高鐵/公交機器人。祝您搶購成功。
+kissandride 是一個開放原始碼的高鐵訂位自動化機器人。祝您訂位順利。
 
-搶票機制，就是在比誰的比較快送出訂單，機器人一定比純手工點擊的快。
+高鐵訂位自動化機制，就是在比誰的比較快完成訂位流程，機器人一定比純手工操作快。
 
-售票系統的「驗證碼」機制會讓一般不會寫程式的民眾更難公平地購買到預期的門票，因為機器人可以自動填入驗證碼內容。
+售票系統的「驗證碼」機制會讓一般不會寫程式的民眾更難公平地購買到高鐵車票，因為機器人可以自動填入驗證碼內容。
 
-部份的售票系統可以透過「人海戰術」來提升買到票的機率，因此建議大家可以麻煩親朋好友去註冊售票系統的帳號。注意：在使用他人的帳號搶票之前，一定要告知當事人用途，並徵詢同意與授權。
+部份的售票系統可以透過「人海戰術」來提升買到票的機率，因此建議大家可以麻煩親朋好友去註冊售票系統的帳號。注意：在使用他人的帳號訂位之前，一定要告知當事人用途，並徵詢同意與授權。
 
-出發點是讓一般民眾與代購黃牛或懂得寫程式的人有類似的基準點或類似的起跑線上，用魔法對抗魔法，當某一天大家都是透過機器人來搶票時，當機器人數量已多到影響一般民眾購票的權利時，售票業者才比較有可能會對未來熱門演唱會改採「實名制」+「抽籤制」，讓更多民眾可以公平地購買到門票，就可以跟「人海戰術」與「搶票機器人」說 bye-bye 。
+kissandride 的出發點是讓一般民眾與代購黃牛或懂得寫程式的人有類似的基準點或類似的起跑線上，用魔法對抗魔法，當某一天大家都是透過機器人來訂位時，當機器人數量已多到影響一般民眾購票的權利時，售票業者才比較有可能會對未來熱門路線改採「實名制」+「抽籤制」，讓更多民眾可以公平地購買到高鐵車票，就可以跟「人海戰術」與「訂位機器人」說 bye-bye 。
 
-台灣藝文活動的文創法第十條中的「不正方式」由於沒有明確定義，代表的是所有軟體都涉嫌違反。故在此呼籲大家，勿以身試法。
+台灣交通相關法規中對於自動化操作的規範由於沒有明確定義，代表的是所有軟體都涉嫌違反。故在此呼籲大家，勿以身試法。
 
-以下文章出現的「搶票」指的是「非台灣的藝文活動或車票」。
+以下文章出現的「訂位」指的是「非台灣的藝文活動或車票」。
 
-MaxBot is a FREE and open source bot program. Good luck getting your expected food or bus seat.
+kissandride is a FREE and open source automation bot for train ticket booking. Good luck getting your train tickets.
 
 ## LEGAL NOTICE 法律聲明
 
@@ -25,7 +25,7 @@ MaxBot is a FREE and open source bot program. Good luck getting your expected fo
 
 作者沒有意圖要他人購得的票券進行加價轉售或是使用在違法的事情上，他人的行為並不在作者的意識支配範圍之內，作者不對他人的非法行為負責。
 
-使用此儲存庫或與之相關的任何程式碼，即表示您同意[法律聲明](https://github.com/max32002/tixcraft_bot/blob/master/LEGAL_NOTICE.md)。作者不對該儲存庫的使用負責與背書，也不對其他使用者所做的任何副本、分叉、重新上傳或與 MaxBot 相關的任何其他內容負責。 這是作者唯一的帳戶和儲存庫。 為了防止假冒或不負責任的行為，請遵守此儲存庫使用的 GNU GPL 授權。
+使用此儲存庫或與之相關的任何程式碼，即表示您同意[法律聲明](https://github.com/max32002/tixcraft_bot/blob/master/LEGAL_NOTICE.md)。作者不對該儲存庫的使用負責與背書，也不對其他使用者所做的任何副本、分叉、重新上傳或與 kissandride 相關的任何其他內容負責。 這是作者唯一的帳戶和儲存庫。 為了防止假冒或不負責任的行為，請遵守此儲存庫使用的 GNU GPL 授權。
 
 </details>
 
@@ -34,32 +34,32 @@ MaxBot is a FREE and open source bot program. Good luck getting your expected fo
 <details>
 <summary><code><b>保護你的帳戶</b>（點我展開）</code></summary>
 
-目前的售票系統售票無法阻擋機器人進行購票，官方只能從伺服器存取記錄來看到速度過快的記錄，並將之視之為機器人，對其封鎖帳號，短時間刷新幾秒會被鎖帳號並沒有明確的遊戲規則。
+目前的售票系統無法阻擋自動化程式進行訂位，官方只能從伺服器存取記錄來看到速度過快的記錄，並將之視之為機器人，對其封鎖帳號，短時間內頻繁刷新幾秒會被鎖帳號並沒有明確的遊戲規則。
 
-Q：在沒有違法的前提下，要搶拓元的蛋黃酥與 KKTIX 的（非台灣）海外活動，怎麼才不會被官方鎖帳號？
+Q：在沒有違法的前提下，要訂購其他平台的車票與 KKTIX 的活動門票，怎麼才不會被官方鎖帳號？
 
-A：從之前 MaxBot 執行秒數來看，較好的電腦花費秒數大約 8 秒，一般電腦大約花費 10 ～ 12 秒，以秒殺的蛋黃酥來說，建議設定機器人啟動時間為開搶前 2 秒，停止時間為開搶後的 15 秒，是可以降低被官方鎖帳號的機率。
+A：從之前 kissandride 執行秒數來看，較好的電腦花費秒數大約 8 秒，一般電腦大約花費 10 ～ 12 秒，以秒殺的高鐵車票來說，建議設定自動化程式啟動時間為開放訂位前 2 秒，停止時間為開放訂位後的 15 秒，是可以降低被官方鎖帳號的機率。
 
 而清票，需要長時間地重新整理，請以自然人能處理的前提下，設定重新整理的延遲時間為一般人可以處理的 2 秒以上。
 
-如果說你想增加在伺服器上存取記錄的變化程度，可以使用秒數的關鍵字功能，讓 MaxBot 在特定秒數時啟動與暫停。參考影片：https://youtu.be/u3YQCZZu6kE
+如果說你想增加在伺服器上存取記錄的變化程度，可以使用秒數的關鍵字功能，讓 kissandride 在特定秒數時啟動與暫停。參考影片：https://youtu.be/u3YQCZZu6kE
 
-MaxBot 的出發點是幫助大家在購票時，可以有效率地自動化在花時間、重覆又無聊的刷新網頁。
+kissandride 的出發點是幫助大家在購票時，可以有效率地自動化在花時間、重覆又無聊的刷新網頁。
 
 如果有任何違法，必定立即修正。
 
 </details>
 
-## Download 蛋黃酥上車程式下載
+## Download kissandride 下載
 
-蛋黃酥上車程式下載:
+kissandride 程式下載:
 https://github.com/max32002/tixcraft_bot/releases
 
 下載說明:
 
-- 目前有打包的「執行檔」，只有 Windows 平台，其他作業系統需要使用原始碼來執行。當然 Windows 平台也可以用原始碼執行 MaxBot.
-- 如果你是要用「原始碼」執行 MaxBot, 在透過 git clone 或在 github 按下載原始碼的 zip 檔， python 版本使用 3.7 / 3.8 / 3.9 / 3.10 這 4 個版號測試功能正常。
-- 如果有辦法的話，建議使用原始碼來執行 MaxBot，執行上的「效率」與「相容性」的問題會較少。
+- 目前有打包的「執行檔」，只有 Windows 平台，其他作業系統需要使用原始碼來執行。當然 Windows 平台也可以用原始碼執行 kissandride.
+- 如果你是要用「原始碼」執行 kissandride, 在透過 git clone 或在 github 按下載原始碼的 zip 檔， python 版本使用 3.7 / 3.8 / 3.9 / 3.10 這 4 個版號測試功能正常。
+- 如果有辦法的話，建議使用原始碼來執行 kissandride，執行上的「效率」與「相容性」的問題會較少。
 
 
 
@@ -81,12 +81,12 @@ https://github.com/max32002/tixcraft_bot/releases
 <details>
 <summary><code><b>透過原始碼的執行方法</b>（點我展開）</code></summary>
 
-透過原始碼執行 MaxBot 教學影片：
+透過原始碼執行 kissandride 教學影片：
 https://youtu.be/HpVG91j0lbI
 
 使用原始碼的解法，第一步是先取得原始碼後，開啟 Terminal(終端機) 視窗來下指令，應該是 4 行指令就可以了。
 
-請參看看文章: 如何用虛擬主機搶拓元的門票，這篇文章是以虛擬主機來示範，在 Windows / macOS / Linux 平台裡的 python 操作方式幾乎相同。
+請參看看文章: 如何用虛擬主機訂高鐵車票，這篇文章是以虛擬主機來示範，在 Windows / macOS / Linux 平台裡的 python 操作方式幾乎相同。
 
 詳細的文字說明:
 https://max-everyday.com/2023/11/buy-ticket-by-vm/
@@ -127,9 +127,9 @@ python3 chrome_tixcraft.py
 python3 chrome_tixcraft.py --input settings.json
 ```
 
-#### 如果遇到 MaxBot 改版, 請重新操作上面 4 個步驟一次, 即可取得新的版本.
+#### 如果遇到 kissandride 改版, 請重新操作上面 4 個步驟一次, 即可取得新的版本.
 
-#### 如果 MaxBot 沒改版, 第二次要再執行的話, 使用 Step 2 + Step 4, 這 2 行指令, 就可以執行 MaxBot.
+#### 如果 kissandride 沒改版, 第二次要再執行的話, 使用 Step 2 + Step 4, 這 2 行指令, 就可以執行 kissandride.
 
 #### 如果你是 ARM CPU 應該會在 Step 3 就顯示錯誤訊息, 解法:
 
@@ -158,14 +158,14 @@ https://github.com/max32002/tixcraft_bot/issues/82#issuecomment-1878986084
 
 #### PS：
 
-搶票程式可以多開 chrome 瀏覽器，如果你電腦效能高。但如果開太多瀏覽器會顯示 Out of Memory, 請增加 Windows 的虛擬記憶體:
+自動化訂位程式可以多開 chrome 瀏覽器，如果你電腦效能高。但如果開太多瀏覽器會顯示 Out of Memory, 請增加 Windows 的虛擬記憶體:
 https://zh-tw.emeditor.com/increase-virtual-memory/
 
 #### PS：
 
 「掛機模式」的選項，指人不需要在電腦前，驗證碼會猜到對為止。
 
-### Q: 是只有使用虛擬主機才要用程式碼執行搶票機器人嗎？
+### Q: 是只有使用虛擬主機才要用程式碼執行訂位自動化程式嗎？
 
 **A:** 除了 Window 有打包的執行檔之外, macOS / Linux 只能使用原始碼來執行, 當然 Windows 也可以用原始碼來執行.
 
@@ -173,11 +173,11 @@ https://zh-tw.emeditor.com/increase-virtual-memory/
 
 ## File Description 檔案說明
 主要的檔案說明:
-- chrome_tixcraft.py : 搶票機器人主程式，用來自動化網頁的操作，使用元件是 selenium。
-- nodriver_tixcraft.py : 也是搶票機器人主程式，用來自動化網頁的操作，使用的元件是 nodriver。
-- settings.py : 編輯 settings.json 的 GUI 介面。提供圖片 OCR 功能給 chrome 擴充功能。支援定時啟用/停用 MaxBot。
+- chrome_tixcraft.py : 自動化訂位主程式，用來自動化網頁的操作，使用元件是 selenium。
+- nodriver_tixcraft.py : 也是自動化訂位主程式，用來自動化網頁的操作，使用的元件是 nodriver。
+- settings.py : 編輯 settings.json 的 GUI 介面。提供圖片 OCR 功能給 chrome 擴充功能。支援定時啟用/停用 kissandride。
 - settings_old.py : 舊版本的編輯 settings.json 的 GUI 介面，與 settings.py 的差別在介面一個是網頁形式，old 的用的是視窗形式。
-- config_launcher.py : 設定檔管理, 方便對多個設定檔案搶票。
+- config_launcher.py : 設定檔管理, 方便對多個設定檔進行自動化訂位。
 
 ## Introduce the Implement 實作方法
 
@@ -192,7 +192,7 @@ https://github.com/sml2h3/ddddocr
 
 ## Common Problems 常見問題整理
 
-整理大家在搶票時常遇到的問題：
+整理大家在訂位自動化時常遇到的問題：
 https://max-everyday.com/2023/02/common-problem-when-you-buy-ticket
 
 ## Extension Privacy 擴充功能隱私權政策

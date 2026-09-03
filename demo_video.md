@@ -37,7 +37,7 @@ KKIX 加購粉絲福利
 https://youtu.be/Hc2wW_sWiAo
 
 ### 2024-03-22
-MaxBot 售票系統架構猜測與搶票建議
+kissandride 售票系統架構猜測與搶票建議
 
 https://youtu.be/alpy9HX6aRw
 
@@ -47,7 +47,7 @@ https://youtu.be/alpy9HX6aRw
 https://youtu.be/z3mM_Ljui2U
 
 ### 2024-01-15: 
-MaxBot Plus 1.0.6 擴充功能 for ticktmaster.sg
+kissandride Plus 1.0.6 擴充功能 for ticktmaster.sg
 
 https://youtu.be/V8S_E7ayAGU
 
@@ -57,12 +57,12 @@ https://youtu.be/V8S_E7ayAGU
 https://youtu.be/u3YQCZZu6kE
 
 ### 2024-01-10:
-MaxBot Plus 擴充功能 刷hkticketing
+kissandride Plus 擴充功能 刷hkticketing
 
 https://youtu.be/zOzFYJsqWME
 
 ### 2024-01-01: 
-MaxBot Plus 擴充功能 刷cityline
+kissandride Plus 擴充功能 刷cityline
 
 https://youtu.be/rRl_EETv_b0
 
