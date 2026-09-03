@@ -1,7 +1,0 @@
-===== TBL region
-舞台方向</div></div>
-		</div>     
-		
-		<div class="locationChoice" id="locationChoice">       
-			
-		<table id="TBL" cellspacing="1px" cellpadding="0" border="0" width="auto" style="width: 289px;"><tbody><tr><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td></tr><tr><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td></tr><tr><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td></tr><tr><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right">&nbsp;</td><td class="people right"
