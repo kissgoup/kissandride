@@ -1983,11 +1983,11 @@ def get_extension_config(config_dict):
         ext = get_maxbot_extension_path(CONST_MAXBOT_EXTENSION_NAME)
         if len(ext) > 0:
             conf.add_extension(ext)
-            util.dump_settings_to_maxbot_plus_extension(ext, config_dict, CONST_MAXBOT_CONFIG_FILE)
+            util.link_settings_file_to_extension(os.path.join(util.get_app_root(), CONST_MAXBOT_CONFIG_FILE), ext)
         ext = get_maxbot_extension_path(CONST_MAXBLOCK_EXTENSION_NAME)
         if len(ext) > 0:
             conf.add_extension(ext)
-            util.dump_settings_to_maxblock_plus_extension(ext, config_dict, CONST_MAXBOT_CONFIG_FILE, CONST_MAXBLOCK_EXTENSION_FILTER)
+            util.link_settings_file_to_extension(os.path.join(util.get_app_root(), CONST_MAXBOT_CONFIG_FILE), ext)
     return conf
 
 async def nodrver_block_urls(tab, config_dict):

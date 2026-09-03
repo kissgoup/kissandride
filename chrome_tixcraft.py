@@ -48,7 +48,7 @@ except Exception as exc:
     print(exc)
     pass
 
-CONST_APP_VERSION = "MaxBot (2026.09.02)"
+CONST_APP_VERSION = "MaxBot (2026.09.03)"
 
 CONST_MAXBOT_ANSWER_ONLINE_FILE = "MAXBOT_ONLINE_ANSWER.txt"
 CONST_MAXBOT_CONFIG_FILE = "settings.json"
@@ -431,11 +431,8 @@ def get_uc_options(uc, config_dict, webdriver_path):
     for ext in extension_list:
         ext = ext.replace('.crx','')
         if os.path.exists(ext):
-            # sync config.
-            if CONST_MAXBOT_EXTENSION_NAME in ext:
-                util.dump_settings_to_maxbot_plus_extension(ext, config_dict, CONST_MAXBOT_CONFIG_FILE)
-            if CONST_MAXBLOCK_EXTENSION_NAME in ext:
-                util.dump_settings_to_maxblock_plus_extension(ext, config_dict, CONST_MAXBOT_CONFIG_FILE, CONST_MAXBLOCK_EXTENSION_FILTER)
+            # sync config: extension reads the same master settings.json (hardlink).
+            util.link_settings_file_to_extension(os.path.join(util.get_app_root(), CONST_MAXBOT_CONFIG_FILE), ext)
             load_extension_path += ("," + os.path.abspath(ext))
             #print("load_extension_path:", load_extension_path)
 
@@ -2470,12 +2467,54 @@ def kktix_confirm_order_button(driver):
 #   : 2: /events/xxx/registrations/new
 #   : This is ONLY for case-1, because case-2 lenght >5
 def kktix_events_press_next_button(driver):
-    is_button_clicked = press_button(driver, By.CSS_SELECTOR,'.tickets > a.btn-point')
-    return is_button_clicked
+    """活動頁的「下一步」入口按鈕 (case-1)。
+
+    舊 DOM: .tickets > a.btn-point
+    新多場次 DOM: div.event-list > ul > li > a.btn-point (沒有 .tickets 父層)
+    -> 依序試各 selector, 按下第一個 enabled 的按鈕。
+    """
+    css_selectors = [
+        '.tickets > a.btn-point',
+        'a.btn-point',
+    ]
+    for css in css_selectors:
+        buttons = []
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, css)
+        except Exception:
+            buttons = []
+        if not buttons:
+            continue
+        for btn in buttons:
+            try:
+                if btn.is_enabled():
+                    btn.click()
+                    return True
+            except Exception:
+                # native click intercepted -> 用 JS click 補一次
+                try:
+                    driver.execute_script("arguments[0].click();", btn)
+                    return True
+                except Exception:
+                    pass
+    return False
 
 #   : This is for case-2 next button.
 def kktix_press_next_button(driver):
     ret = False
+
+    # 新 seat-selection 流程: couldNextStep() = agreeTerm && ticketChosen() && ...
+    # next 按鈕是 disabled 直到 #person_agree_terms 被勾選。按下前先 tick agree
+    # (找不到就跳過, 舊式流程沒有第一頁 agree checkbox)。
+    try:
+        agree_checkbox = driver.find_element(By.CSS_SELECTOR, '#person_agree_terms')
+        if not agree_checkbox is None:
+            try:
+                force_check_checkbox(driver, agree_checkbox)
+            except Exception as exc:
+                pass
+    except Exception as exc:
+        pass
 
     css_select = "div.register-new-next-button-area > button"
     but_button_list = None
@@ -2493,7 +2532,6 @@ def kktix_press_next_button(driver):
             try:
                 driver.set_script_timeout(0.1)
                 driver.execute_script("arguments[0].focus();", btn)
-                ret = True
             except Exception as exc:
                 pass
             for retry_idx in range(4):
@@ -2502,11 +2540,20 @@ def kktix_press_next_button(driver):
                     btn.click()
                     time.sleep(0.2)
                     ret = True
+                    break
                 except Exception as exc:
                     print(exc)
                     pass
-                if ret:
-                    break
+            if not ret:
+                # native click 全被攔截 (elementclickintercepted) ->
+                # 用 JS click 強制送出最後一次嘗試。
+                try:
+                    driver.set_script_timeout(1)
+                    driver.execute_script("arguments[0].click();", btn)
+                    ret = True
+                except Exception as exc:
+                    print(exc)
+                    pass
 
     return ret
 

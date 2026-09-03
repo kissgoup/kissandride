@@ -9,10 +9,48 @@ chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((e) => {
     //console.log(msg);
 });
 
+// settings.json is a single shared master file (hardlink to app root), it
+// never carries extension-specific keys. Use the built-in filter list when
+// the master does not provide one.
+const DEFAULT_DOMAIN_FILTER = [
+"*.doubleclick.net/*",
+"*.googlesyndication.com/*",
+"*.ssp.hinet.net/*",
+"*a.amnet.tw/*",
+"*adx.c.appier.net/*",
+"*cdn.cookielaw.org/*",
+"*cdnjs.cloudflare.com/ajax/libs/clipboard.js/*",
+"*clarity.ms/*",
+"*cloudfront.com/*",
+"*cms.analytics.yahoo.com/*",
+"*e2elog.fetnet.net/*",
+"*fundingchoicesmessages.google.com/*",
+"*ghtinc.com/*",
+"*google-analytics.com/*",
+"*googletagmanager.com/*",
+"*googletagservices.com/*",
+"*img.uniicreative.com/*",
+"*lndata.com/*",
+"*match.adsrvr.org/*",
+"*onead.onevision.com.tw/*",
+"*play.google.com/log?*",
+"*popin.cc/*",
+"*rollbar.com/*",
+"*sb.scorecardresearch.com/*",
+"*tagtoo.co/*",
+"*ticketmaster.sg/js/adblock*",
+"*ticketmaster.sg/js/adblock.js*",
+"*tixcraft.com/js/analytics.js*",
+"*tixcraft.com/js/common.js*",
+"*tixcraft.com/js/custom.js*",
+"*treasuredata.com/*",
+"*www.youtube.com/youtubei/v1/player/heartbeat*",
+];
+
 function reload_rule_from_setting(settings)
 {
     if(!settings.hasOwnProperty("domain_filter")) {
-        settings.domain_filter = [];
+        settings.domain_filter = DEFAULT_DOMAIN_FILTER;
     }
     initializeDynamicRules(settings.domain_filter);
 }

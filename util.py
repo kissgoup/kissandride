@@ -535,6 +535,34 @@ def dump_settings_to_maxblock_plus_extension(ext, config_dict, CONST_MAXBOT_CONF
     except Exception as e:
         pass
 
+
+def link_settings_file_to_extension(master_path, ext_path):
+    # PS: keep only one master settings.json at app root. The extension's
+    # data/settings.json becomes a hardlink to the master, so every launch
+    # reads the same file and no separate copy is maintained.
+    if not os.path.isfile(master_path):
+        return False
+
+    target_dir = os.path.join(ext_path, "data")
+    # special case, due to data folder is empty, sometime will be removed.
+    if not os.path.exists(target_dir):
+        try:
+            os.makedirs(target_dir)
+        except Exception as exc:
+            return False
+
+    target_path = os.path.join(target_dir, os.path.basename(master_path))
+    try:
+        if os.path.isfile(target_path):
+            if os.path.samefile(master_path, target_path):
+                return True
+            # stale independent copy (legacy dump), replace it with the link.
+            os.unlink(target_path)
+        os.link(master_path, target_path)
+        return True
+    except Exception as exc:
+        return False
+
 # convert web string to reg pattern
 def convert_string_to_pattern(my_str, dynamic_length=True):
     my_hint_anwser_length = len(my_str)

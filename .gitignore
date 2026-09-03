@@ -1,7 +1,31 @@
-# Maxbot runtime state files (contain personal order URLs)
+# === Maxbot runtime state files (contain personal order URLs) ===
 MAXBOT_*.txt
 webdriver/*/data/status.json
 
-# local run output
+# extension settings are hardlinks to the single root settings.json master
+webdriver/*/data/settings.json
+
+# === Local user profile data (personal session / order history) ===
+webdriver/*/data/*.jsonl
+webdriver/*/data/session*
+webdriver/*/profile/**/*
+
+# === Machine-readable / transient analysis artifacts ===
+*_page.html
+*_reg_*.html
+probe_*.py
+main_kktix.py
+registrations-*.js
+registrations-*.js_plain.js
+reg_*.js
+reg_*.js_plain.js
+
+# === Sensitive: account credentials & plaintext passwords ===
+settings.json
+
+# === Local development noise ===
 *.log
 __pycache__/
+node_modules/
+.DS_Store
+Thumbs.db
