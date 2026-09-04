@@ -10454,7 +10454,7 @@ def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style, 
         if is_need_refresh:
             # PS: refreshing during queue/seat-arrangement sends the order
             #     back to the end of the queue. Block it after recent submit.
-            if _refresh_blocked_by_queue(ticketplus_dict, time.time()):
+            if _refresh_blocked_by_queue(driver, ticketplus_dict, time.time()):
                 if show_debug_message:
                     print("skip refresh: recent submit, queue running.")
                 is_need_refresh = False
@@ -10610,8 +10610,20 @@ def _queue_heartbeat_state(now_time, last_press_time, last_beat_time):
         return False, elapsed
     return True, elapsed
 
-def _refresh_blocked_by_queue(ticketplus_dict, now_time):
-    return not _recent_submit_seconds(ticketplus_dict, now_time) is None
+def _refresh_blocked_by_queue(driver, ticketplus_dict, now_time):
+    # PS: right after a submit the spinner text can vanish before navigation to
+    #     /confirmSeat/ completes, so never refresh within the repress window.
+    #     After that window only a visibly-queuing page keeps the refresh block:
+    #     a submit that neither navigated nor shows queue text has failed, and
+    #     refreshing is how the bot re-queries real stock.
+    #     (2026-09-04 live: the old unconditional 300s block let a failed submit
+    #     re-arm itself every ~30s via the repress loop and freeze the hunt.)
+    elapsed = _recent_submit_seconds(ticketplus_dict, now_time)
+    if elapsed is None:
+        return False
+    if elapsed < CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS:
+        return True
+    return ticketplus_queue_in_progress(driver)
 
 # PS: after submit (or while waiting to enter a hot event), ticketplus keeps the
 #     order DOM and shows a spinner text on top: 排隊購票中/系統安排座位/請別離開頁面.
@@ -10631,6 +10643,29 @@ def _repress_suppressed(ticketplus_dict, now_time):
         return False
     elapsed = now_time - ticketplus_dict["last_next_press_time"]
     return 0 <= elapsed < CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS
+
+def _submit_stale_on_order_page(driver, ticketplus_dict, now_time):
+    # A submit that, past the repress window, is still on the same /order/ url
+    # with no queue text has failed (tickets gone / order rejected). Refresh to
+    # re-query stock instead of re-pressing the stale form forever.
+    # (2026-09-04 live: every ~30s re-press re-armed the 300s no-refresh guard.)
+    if ticketplus_dict is None:
+        return False
+    elapsed = _recent_submit_seconds(ticketplus_dict, now_time)
+    if elapsed is None:
+        return False
+    if elapsed < CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS:
+        return False
+    if ticketplus_queue_in_progress(driver):
+        return False
+    try:
+        press_url = (ticketplus_dict.get("last_next_press_url") or "").split('#')[0].split('?')[0]
+        current_url = driver.current_url.split('#')[0].split('?')[0]
+    except Exception:
+        return False
+    if len(press_url) == 0 or len(current_url) == 0:
+        return False
+    return current_url == press_url
 
 def _text_indicates_ticketplus_queue(text):
     # pure decision: does the page text contain the queue/seat-arrangement words?
@@ -10680,6 +10715,11 @@ def ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticket
     # waiting heartbeat message and the refresh-guard.
     if is_form_sumbited and not ticketplus_dict is None:
         ticketplus_dict["last_next_press_time"] = time.time()
+        try:
+            # url at press time: same page later + no queue text = failed submit
+            ticketplus_dict["last_next_press_url"] = driver.current_url
+        except Exception:
+            pass
     return is_form_sumbited
 
 def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict):
@@ -10697,17 +10737,26 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
     # runs on this same /order/ url for seconds to minutes. Keep reporting so
     # the user knows it is queueing, not stuck.
     now_time = time.time()
+    is_queue_visible = ticketplus_queue_in_progress(driver)
+
+    # queue heartbeat: after a successful submit, the seat-arrangement spinner
+    # runs on this same /order/ url for seconds to minutes. Keep reporting so
+    # the user knows it is queueing, not stuck.
     do_heartbeat = False
     queue_elapsed = 0
     if "last_next_press_time" in ticketplus_dict:
         do_heartbeat, queue_elapsed = _queue_heartbeat_state(now_time, ticketplus_dict["last_next_press_time"], ticketplus_dict.get("last_queue_beat", 0))
     if do_heartbeat:
-        print("[排隊守候] 已送出 %d 秒，排隊/劃位進行中，請勿重新整理..." % queue_elapsed)
-        ticketplus_dict["last_queue_beat"] = now_time
+        # only claim queueing while the page shows it (or within the nav-gap
+        # right after a press); otherwise the message would lie while the bot
+        # is stuck on a failed submit (2026-09-04).
+        if is_queue_visible or queue_elapsed < CONST_TICKETPLUS_REPRESS_SUPPRESS_SECONDS:
+            print("[排隊守候] 已送出 %d 秒，排隊/劃位進行中，請勿重新整理..." % queue_elapsed)
+            ticketplus_dict["last_queue_beat"] = now_time
 
     # queue/seat-arrangement spinner on page: passively wait. Re-selecting an
     # area or re-pressing nextBtn here resets the queue slot.
-    if ticketplus_queue_in_progress(driver):
+    if is_queue_visible:
         if show_debug_message:
             print("queue spinner on page, passively waiting.")
         return ticketplus_dict
@@ -10765,18 +10814,31 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
             print("is_captcha_sent", is_captcha_sent)
     else:
         if not next_step_button is None:
-            # form ready on arrival (e.g. selection kept after reload):
-            # submit it, but not twice within cooldown to avoid double press
-            # before page navigation.
+            # form ready on arrival (e.g. selection kept after reload): submit
+            # it, but not twice within cooldown to avoid double press before
+            # page navigation.
+            now_time = time.time()
             last_press_time = 0
             if "last_next_press_time" in ticketplus_dict:
                 last_press_time = ticketplus_dict["last_next_press_time"]
-            now_time = time.time()
-            if now_time - last_press_time >= CONST_TICKETPLUS_NEXT_PRESS_COOLDOWN \
-                and not _repress_suppressed(ticketplus_dict, now_time):
-                print("next step button ready, start to submit.")
-                is_form_sumbited = ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
-                print("is_form_sumbited", is_form_sumbited)
+            if now_time - last_press_time >= CONST_TICKETPLUS_NEXT_PRESS_COOLDOWN:
+                if _submit_stale_on_order_page(driver, ticketplus_dict, now_time):
+                    # the previous submit never navigated and the page is not
+                    # queueing -> it failed. Refresh to re-query real stock;
+                    # re-pressing the stale enabled button would just re-submit
+                    # a dead order over and over (2026-09-04).
+                    print("previous submit did not go through, refresh to re-query stock.")
+                    try:
+                        driver.refresh()
+                        time.sleep(0.3)
+                    except Exception as exc:
+                        pass
+                    ticketplus_dict.pop("last_next_press_time", None)
+                    ticketplus_dict.pop("last_next_press_url", None)
+                elif not _repress_suppressed(ticketplus_dict, now_time):
+                    print("next step button ready, start to submit.")
+                    is_form_sumbited = ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
+                    print("is_form_sumbited", is_form_sumbited)
 
     return ticketplus_dict
 
@@ -11413,7 +11475,53 @@ def facebook_main(driver, config_dict):
         facebook_login(driver, facebook_account, facebook_password)
         time.sleep(2)
 
+_last_crash_recovery_time = 0.0
+# PS: after a successful recovery the tab can crash again immediately (flaky
+#     renderer). Recovering on every get_current_url call would hammer driver.get
+#     in a tight loop; only attempt at most once per window.
+CONST_CRASH_RECOVERY_COOLDOWN = 5.0
+
+def _is_crashed_tab_error(str_exc):
+    # renderer / execution-context gone: reading current_url on a crashed tab
+    # raises these. (observed on chrome 152 + ticketplus, 2026-09-04)
+    if not str_exc:
+        return False
+    crash_markers = ['tab crashed', 'no such execution context', 'detached from']
+    for marker in crash_markers:
+        if marker in str_exc:
+            return True
+    return False
+
+def _try_recover_crashed_tab(driver):
+    # Nurse a crashed tab back to life with a fresh navigation to the last known
+    # url (a WebDriver GET spawns a new renderer for the tab). Returns True when
+    # the tab answers again.
+    target_url = ""
+    try:
+        target_url = read_last_url_from_file()
+    except Exception:
+        pass
+    try:
+        handles = driver.window_handles
+        if handles:
+            driver.switch_to.window(handles[0])
+    except Exception:
+        pass
+    attempt_list = ["about:blank"]
+    if len(target_url) > 0:
+        attempt_list = [target_url, "about:blank"]
+    for attempt_url in attempt_list:
+        try:
+            driver.get(attempt_url)
+            time.sleep(0.3)
+            driver.current_url   # probe: still dead => raises again
+            return True
+        except Exception:
+            continue
+    return False
+
 def get_current_url(driver):
+    global _last_crash_recovery_time
     DISCONNECTED_MSG = ': target window already closed'
 
     url = ""
@@ -11501,8 +11609,36 @@ def get_current_url(driver):
                     driver.quit()
                     sys.exit()
 
+        # PS: 2026-09-04: a crashed /order/ tab made every current_url read raise,
+        #     and the bot spun printing the exception forever - no refresh, no
+        #     retry. A crashed-tab error is not fatal: wake the tab with a fresh
+        #     GET (spawns a new renderer). On success return the (re-read) url and
+        #     let the caller continue; only a tab that ignores recovery is fatal.
+        crash_handled = False
+        if _is_crashed_tab_error(str_exc):
+            crash_handled = True
+            now_time = time.time()
+            if now_time - _last_crash_recovery_time >= CONST_CRASH_RECOVERY_COOLDOWN:
+                _last_crash_recovery_time = now_time
+                print("tab crashed - attempting recovery...")
+                if _try_recover_crashed_tab(driver):
+                    print("tab recovered.")
+                    try:
+                        url = driver.current_url
+                    except Exception:
+                        url = ""
+                else:
+                    print('quit bot by unrecoverable tab crash')
+                    is_quit_bot = True
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    sys.exit()
+
         # not is above case, print exception.
-        print("Exception:", str_exc)
+        if (not crash_handled) or len(url) == 0:
+            print("Exception:", str_exc)
         pass
 
     return url, is_quit_bot

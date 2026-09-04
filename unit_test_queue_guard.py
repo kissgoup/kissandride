@@ -40,10 +40,12 @@ class FakeNextButton:
 
 
 class OrderDriver:
-    def __init__(self, next_button=None, has_captcha=False, body_text=""):
+    def __init__(self, next_button=None, has_captcha=False, body_text="", current_url="https://ticketplus.com.tw/order/e/s"):
         self.next_button = next_button
         self.has_captcha = has_captcha
         self.body_text = body_text
+        self.current_url = current_url
+        self.refresh_count = 0
     def find_element(self, by, css):
         if css == 'input[placeholder="請輸入驗證碼"]':
             if self.has_captcha:
@@ -60,6 +62,8 @@ class OrderDriver:
         return None
     def set_script_timeout(self, t):
         pass
+    def refresh(self):
+        self.refresh_count += 1
 
 
 results = []
@@ -108,14 +112,28 @@ finally:
     bot.time.sleep = _real_sleep
 
 # G5 _refresh_blocked_by_queue
-ok = bot._refresh_blocked_by_queue({"last_next_press_time": NOW - 10}, NOW) is True
-print("[G5a recent submit blocks refresh] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
+#   PS: 2026-09-04 實測修復: 送出後 30 秒內一律禁刷新(導航過渡窗),但超過 30 秒
+#       且頁面無排隊文字 → 代表那次送出其實失敗,刷新是安全且必要(重查庫存)。
+#       否則 queue guard 會被失敗送出每 30 秒重設一次,永遠鎖死刷新。
+no_queue_driver = OrderDriver(body_text="票區一覽 R2區 剩餘 5")
+queue_driver = OrderDriver(body_text="排隊購票中 請稍候")
 
-ok = bot._refresh_blocked_by_queue({}, NOW) is False
+ok = bot._refresh_blocked_by_queue(no_queue_driver, {"last_next_press_time": NOW - 10}, NOW) is True
+print("[G5a recent submit (10s) blocks refresh] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
+
+ok = bot._refresh_blocked_by_queue(no_queue_driver, {}, NOW) is False
 print("[G5b no marker allows refresh] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
 
-ok = bot._refresh_blocked_by_queue(None, NOW) is False
+ok = bot._refresh_blocked_by_queue(no_queue_driver, None, NOW) is False
 print("[G5c None dict allows refresh] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
+
+# 送出 45 秒後仍無排隊文字 = 送出失敗: 不再鎖刷新(舊語意會鎖 300 秒 = 自鎖 bug)
+ok = bot._refresh_blocked_by_queue(no_queue_driver, {"last_next_press_time": NOW - 45}, NOW) is False
+print("[G5d 45s + no queue text -> refresh allowed] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
+
+# 送出 45 秒後仍有排隊文字 = 真的在排隊: 持續鎖刷新
+ok = bot._refresh_blocked_by_queue(queue_driver, {"last_next_press_time": NOW - 45}, NOW) is True
+print("[G5e 45s + queue text -> refresh still blocked] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
 
 # Q1~Q4 排隊文字判定
 ok = bot._text_indicates_ticketplus_queue("排隊購票中 請稍候") is True
@@ -168,20 +186,21 @@ finally:
 ok = btn.click_count == 0
 print("[Q7 repress suppressed right after submit] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
 
-# Q8 短窗外(45 秒),enabled 按鈕恢復自動送出
+# Q8 短窗外(45 秒),enabled 按鈕但仍在同一 /order/ 頁、無排隊文字 = 前次送出失敗:
+#    改成刷新重查庫存,不再盲目重按過期表單(舊語意重按,造成永不刷新循環)
 btn = FakeNextButton()
-td = {"last_next_press_time": NOW - 45}
+driver = OrderDriver(next_button=btn, body_text="票區一覽 R2區 剩餘 5",
+                     current_url="https://ticketplus.com.tw/order/e/s")
+td = {"last_next_press_time": NOW - 45, "last_next_press_url": "https://ticketplus.com.tw/order/e/s"}
 bot.time.time = lambda: NOW
 bot.time.sleep = lambda s: None
 try:
-    bot.ticketplus_order(
-        OrderDriver(next_button=btn, body_text="票區一覽 R2區 剩餘 5"),
-        base_config(), None, None, td)
+    bot.ticketplus_order(driver, base_config(), None, None, td)
 finally:
     bot.time.time = _real_time
     bot.time.sleep = _real_sleep
-ok = btn.click_count == 1
-print("[Q8 repress allowed after suppress window] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
+ok = (btn.click_count == 0) and (driver.refresh_count == 1) and ("last_next_press_time" not in td)
+print("[Q8 stale failed submit refreshes, no blind repress] -> %s" % ("PASS" if ok else "FAIL")); results.append(ok)
 
 print("----")
 print("ALL PASS" if all(results) else "SOME FAILED")
