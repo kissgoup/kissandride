@@ -137,6 +137,9 @@ def get_default_config():
     config_dict["tixcraft"]["pass_date_is_sold_out"] = True
     config_dict["tixcraft"]["auto_reload_coming_soon_page"] = True
 
+    config_dict['ticketplus']={}
+    config_dict["ticketplus"]["code_fields"] = []
+
     config_dict['advanced']={}
 
     config_dict['advanced']['play_sound']={}

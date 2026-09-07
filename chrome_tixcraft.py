@@ -10461,6 +10461,9 @@ def ticketplus_order_expansion_panel(driver, config_dict, current_layout_style, 
         if is_need_refresh:
             # vue mode, refresh need to check more conditions to check.
             print('start to refresh page.')
+            if not ticketplus_dict is None:
+                # 標記本輪已 refresh，避免 disabled 尾的 no-stock fallback 同輪再刷一次。
+                ticketplus_dict["expansion_refreshed_at"] = time.time()
             try:
                 driver.refresh()
                 time.sleep(0.3)
@@ -10513,6 +10516,257 @@ def ticketplus_order_exclusive_code(driver, config_dict, fail_list):
         is_answer_sent, fail_list = fill_common_verify_form(driver, config_dict, inferred_answer_string, fail_list, input_text_css, next_step_button_css, submit_by_enter, check_input_interval)
 
     return is_answer_sent, fail_list, is_question_popup
+
+# PS: settings 驅動的 code/卡號表單（gate）自動填入。與上方的 .exclusive-code「猜答案」
+#     流程互補：這裡不看 wrapper class，改依輸入框的 label/placeholder 文字，把
+#     settings.json ticketplus.code_fields 的 value 原樣填入（不做長度驗證、不送 ENTER）。
+#     只對「輸入框」填值，絕不碰驗證碼框（placeholder=請輸入驗證碼，雙重排除）。
+CONST_TICKETPLUS_OCR_CAPTCHA_PLACEHOLDER = "請輸入驗證碼"
+
+# 收集候選 input：文字類、非 disabled/readOnly、排除驗證碼框。
+# 刻意不排除 .exclusive-code 子樹——該包裝 class 開頭曾被截斷、未知，可能是 exclusive-code。
+CONST_TICKETPLUS_CODE_FIELD_COLLECT_JS = r"""
+var __ocr='請輸入驗證碼', __out=[];
+var __els=document.querySelectorAll("input[type='text'],input[type='number'],input[type='tel']");
+for(var i=0;i<__els.length;i++){var el=__els[i];
+  try{
+    if(el.disabled||el.readOnly)continue;
+    var ph=(el.getAttribute('placeholder')||'').trim();
+    if(ph===__ocr)continue;
+    __out.push(el);
+  }catch(e){}
+}
+return __out;
+"""
+
+# 單一 input 的 ctx 字串：placeholder + 就近 .label 文字（match 命中其一即可）。
+CONST_TICKETPLUS_CODE_FIELD_CTX_JS = r"""
+var el=arguments[0], parts=[];
+try{var ph=(el.getAttribute('placeholder')||'').trim(); if(ph)parts.push(ph);}catch(e){}
+try{
+  var wrap=el.closest?el.closest('.v-input,.v-text-field,.v-input__control'):null;
+  if(wrap){
+    var wt=(wrap.innerText||'').trim(); if(wt)parts.push(wt);
+    var pv=wrap.previousElementSibling;
+    while(pv){var pt=(pv.innerText||'').trim(); if(pt){parts.push(pt);break;} pv=pv.previousElementSibling;}
+  }
+}catch(e){}
+var seen=[],out=[];
+for(var i=0;i<parts.length;i++){if(parts[i]&&seen.indexOf(parts[i])<0){seen.push(parts[i]);out.push(parts[i]);}}
+return out.join(' | ');
+"""
+
+# 填完補 v-model 事件，確保 Vuetify 重新驗證並解鎖下一步。
+CONST_TICKETPLUS_CODE_FIELD_SYNC_JS = r"""
+var el=arguments[0];
+el.dispatchEvent(new Event('input',{bubbles:true}));
+el.dispatchEvent(new Event('change',{bubbles:true}));
+"""
+
+def _ticketplus_code_fields(config_dict):
+    # 防呆讀取 settings ticketplus.code_fields；壞 row 一律過濾，舊 settings 無此區塊回 []。
+    if not isinstance(config_dict, dict):
+        return []
+    ticketplus = config_dict.get("ticketplus")
+    if not isinstance(ticketplus, dict):
+        return []
+    fields = ticketplus.get("code_fields")
+    if not isinstance(fields, list):
+        return []
+    out = []
+    for item in fields:
+        if isinstance(item, dict) and isinstance(item.get("match"), str) \
+           and len(item["match"]) > 0 and isinstance(item.get("value"), str):
+            out.append(item)
+    return out
+
+def _ticketplus_entry_matches(ctx_text, entry):
+    # 決策：ctx 字串是否含 entry["match"] 子字串（label/placeholder 文字匹配）。
+    if ctx_text is None:
+        ctx_text = ""
+    match = entry.get("match") if isinstance(entry, dict) else None
+    return isinstance(match, str) and len(match) > 0 and match in ctx_text
+
+def ticketplus_fill_code_fields_by_settings(driver, config_dict):
+    # 依 label/placeholder 文字，把每筆 code_fields 的 value 填入對應輸入框。
+    # value 原樣輸入、不做字元數/長度驗證、不送 ENTER；已填同值則跳過（冪等）。
+    # 回 True = 本輪有實際送字。
+    code_fields = _ticketplus_code_fields(config_dict)
+    if len(code_fields) == 0:
+        return False
+
+    element_list = []
+    try:
+        element_list = driver.execute_script(CONST_TICKETPLUS_CODE_FIELD_COLLECT_JS)
+    except Exception:
+        pass
+    if element_list is None:
+        element_list = []
+
+    assigned = set()
+    is_fill_any = False
+    for entry in code_fields:
+        value = entry.get("value", "")
+        if len(value) == 0:
+            continue
+        for index, element in enumerate(element_list):
+            if element is None or index in assigned:
+                continue
+            placeholder = ""
+            try:
+                placeholder = element.get_attribute("placeholder") or ""
+            except Exception:
+                placeholder = ""
+            if placeholder == CONST_TICKETPLUS_OCR_CAPTCHA_PLACEHOLDER:
+                # Python 端第二道防線：不填驗證碼框。
+                continue
+            ctx_text = ""
+            try:
+                ctx_text = driver.execute_script(CONST_TICKETPLUS_CODE_FIELD_CTX_JS, element) or ""
+            except Exception:
+                ctx_text = ""
+            if not _ticketplus_entry_matches(str(ctx_text), entry):
+                continue
+            current_value = ""
+            try:
+                current_value = element.get_attribute("value") or ""
+            except Exception:
+                current_value = ""
+            if current_value == value:
+                # 已填相同值：冪等，不重送。
+                assigned.add(index)
+                break
+            try:
+                element.clear()
+                element.send_keys(value)
+                driver.execute_script(CONST_TICKETPLUS_CODE_FIELD_SYNC_JS, element)
+                assigned.add(index)
+                is_fill_any = True
+                print("ticketplus code_fields filled:", placeholder)
+            except Exception:
+                pass
+            break
+    return is_fill_any
+
+def ticketplus_order_apply_code_gate(driver, config_dict):
+    # /order/ gate：填 code_fields + 自動勾同意。
+    # 只有 code_fields 有設定才啟動（feature toggle）；沒設定立刻回 False，
+    # 連 agree 也不跑，既有行為零變更。
+    if len(_ticketplus_code_fields(config_dict)) == 0:
+        return False
+    is_gate_changed = False
+    if ticketplus_fill_code_fields_by_settings(driver, config_dict):
+        is_gate_changed = True
+    if ticketplus_ticket_agree(driver, config_dict):
+        is_gate_changed = True
+    return is_gate_changed
+
+# PS: /order/「無可販售 / 殘數過期 / 等待」態的重查（2026-09-07）。
+# 彈完「無可販售票券」dialog 或頁面一進來就沒有可買區時，nextBtn 會維持 disabled、
+# 而且票區列表常是空的——expansion_panel 對「空列表」不會 refresh（10281-10284 只印一行
+# 就 return），bot 就凍在「不持續更新票數」。這裡補上：
+#   * 頁面有原生浮動「更新票數」按鈕 → 點它（原地重查，最即時）
+#   * 沒有該按鈕 → 整頁 reload 重查真實庫存
+# 步調 = advanced.auto_reload_page_interval（0.1 秒）。
+
+# 找 ticketplus /order/ 原生「更新票數」浮動按鈕：
+#   <button class="float-btn ... accent-blue"><span class="v-btn__content">更新票數 ...</span></button>
+CONST_TICKETPLUS_REFRESH_COUNT_FIND_JS = r"""
+var txt='更新票數', best=null;
+var els=document.querySelectorAll('button,a,[role="button"],.v-btn,.v-list-item,label,[onclick]');
+for(var i=0;i<els.length;i++){var el=els[i];
+  try{
+    if(el.disabled)continue;
+    var cls=(' '+(el.className||'')+' ');
+    if(cls.indexOf(' v-btn--disabled ')>-1)continue;
+    if(el.getAttribute && el.getAttribute('aria-disabled')==='true')continue;
+    var t=((el.innerText)||'').trim();
+    if(t.length>0 && t.indexOf(txt)>-1){
+      if(best===null){best=el;}
+      else if(el.contains(best)){/* ancestor, keep deeper one */}
+      else if(best.contains(el)){best=el;}
+    }
+  }catch(e){}
+}
+return best;
+"""
+
+# 首載給 AJAX 渲染的緩衝：進到「無可買區」態後先等它，避免一進來就把頁面刷掉。
+CONST_TICKETPLUS_NO_STOCK_SETTLE_SECONDS = 1.5
+
+def ticketplus_click_refresh_count_button(driver):
+    # 找到 ticketplus 原生「更新票數」浮動按鈕就用 JS 點擊（bypass 頁尾 overlay 攔截）。
+    # 回 True = 有按到。找不到/不能按回 False（由呼叫端改走整頁 reload）。
+    target = None
+    try:
+        target = driver.execute_script(CONST_TICKETPLUS_REFRESH_COUNT_FIND_JS)
+    except Exception:
+        target = None
+    if target is None:
+        return False
+    try:
+        driver.execute_script("arguments[0].click();", target)
+        print("clicked ticketplus 更新票數 button.")
+        return True
+    except Exception as exc:
+        print("click 更新票數 fail:", exc)
+        return False
+
+def ticketplus_order_no_stock_refresh(driver, config_dict, ticketplus_dict, force=False):
+    # /order/「無可販售 / 殘數過期 / 等待」態的重查。回 True = 本輪已動作（點更新票數或
+    # 整頁 reload），呼叫端應 return 讓下一輪 main loop 重新評估。
+    # force=True：剛關閉失敗 dialog 後強制立即重查一次（略過 settle/上一輪 refresh 標記），
+    #             避免拿過期殘數去重按下一步造成重複彈窗凍結。
+    reload_interval = 0.0
+    try:
+        reload_interval = float(config_dict["advanced"]["auto_reload_page_interval"])
+    except Exception:
+        reload_interval = 0.0
+    if reload_interval <= 0.0:
+        return False
+
+    now_time = time.time()
+
+    if not force:
+        current_url = ""
+        try:
+            current_url = driver.current_url or ""
+        except Exception:
+            current_url = ""
+        if ticketplus_dict.get("no_stock_url") != current_url:
+            # 換頁/新 URL：重新計時，先放行給資料渲染。
+            ticketplus_dict["no_stock_url"] = current_url
+            ticketplus_dict["no_stock_since"] = now_time
+            return False
+        if now_time - ticketplus_dict.get("no_stock_since", now_time) < CONST_TICKETPLUS_NO_STOCK_SETTLE_SECONDS:
+            return False
+
+    # 任何 dialog 開著時不動作（讓 accept/close 流程先處理）。
+    try:
+        if len(driver.find_elements(By.CSS_SELECTOR, 'div[role="dialog"]')) > 0:
+            return False
+    except Exception:
+        pass
+
+    # 本輪剛由 expansion_panel 整頁 refresh 過 → 讓那一次生效，避免同輪重複刷。
+    if not force:
+        try:
+            if now_time - ticketplus_dict.get("expansion_refreshed_at", 0.0) < 0.6:
+                return False
+        except Exception:
+            pass
+
+    if ticketplus_click_refresh_count_button(driver):
+        time.sleep(reload_interval)
+        return True
+
+    try:
+        driver.refresh()
+        print("ticketplus order no sellable ticket, refresh page.")
+    except Exception as exc:
+        pass
+    time.sleep(reload_interval)
+    return True
 
 def get_performance_log(driver, url_keyword):
     url_list = []
@@ -10761,6 +11015,12 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
             print("queue spinner on page, passively waiting.")
         return ticketplus_dict
 
+    # 剛關閉「無可販售票券/購票失敗」dialog（ticketplus_main 記的旗標）：上次送出已失敗、
+    # 殘數過期。立即重查真實庫存（點「更新票數」或整頁 reload），不要拿它去重按下一步。
+    if ticketplus_dict.pop("order_fail_closed", False):
+        if ticketplus_order_no_stock_refresh(driver, config_dict, ticketplus_dict, force=True):
+            return ticketplus_dict
+
     next_step_button = None
     # PS: button disabled means form not ready yet, need to fill;
     #     button enabled means form ready, go to submit directly.
@@ -10810,8 +11070,22 @@ def ticketplus_order(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
         if is_price_assign_by_bot:
             is_answer_sent, ticketplus_dict["fail_list"], is_question_popup = ticketplus_order_exclusive_code(driver, config_dict, ticketplus_dict["fail_list"])
 
+            # NEW: settings 驅動 code/卡號表單填入 + 自動勾同意 (ticketplus.code_fields 有設定才啟動)。
+            if ticketplus_order_apply_code_gate(driver, config_dict):
+                # 本輪已填入欄位/勾了同意：等 Vuetify v-model 重新驗證並解鎖 nextBtn，
+                # 下一輪走 enabled 分支 (含 cooldown/stale-refresh/repress 保護) 只按一次下一步。
+                time.sleep(0.3)
+                return ticketplus_dict
+
             is_captcha_sent = ticketplus_press_next_step(driver, config_dict, ocr, Captcha_Browser, ticketplus_dict)
             print("is_captcha_sent", is_captcha_sent)
+
+        if not is_price_assign_by_bot:
+            # nextBtn 仍 disabled 且本輪選不到任何可買區 → /order/ 等待或殘數過期態。
+            # 頁面有原生「更新票數」就點它、否則整頁 reload，以 auto_reload_page_interval
+            # 持續重查（1.5s settle 窗內先不動，避免首載 AJAX 未完成就被刷掉）。
+            if ticketplus_order_no_stock_refresh(driver, config_dict, ticketplus_dict, force=False):
+                return ticketplus_dict
     else:
         if not next_step_button is None:
             # form ready on arrival (e.g. selection kept after reload): submit
@@ -11428,7 +11702,11 @@ def ticketplus_main(driver, url, config_dict, ocr, Captcha_Browser):
 
         if is_event_page:
             is_button_pressed = ticketplus_accept_realname_card(driver)
-            is_button_pressed = ticketplus_accept_order_fail(driver)
+            # 關閉「無可販售票券/購票失敗」dialog 後記旗標：下一輪先重查真實庫存，
+            # 不要拿過期殘數去重按下一步（重複彈窗、且不再 refresh 的凍結）。
+            is_order_fail_pressed = ticketplus_accept_order_fail(driver)
+            if is_order_fail_pressed:
+                ticketplus_dict["order_fail_closed"] = True
 
             is_reloading = False
 
