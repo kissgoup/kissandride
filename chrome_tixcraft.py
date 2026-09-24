@@ -37,6 +37,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
+from urllib.parse import parse_qs, quote, urlparse
 from urllib3.exceptions import InsecureRequestWarning
 
 import util
@@ -4902,6 +4903,298 @@ def cityline_performance(driver, config_dict):
                         if click_ret:
                             break
 
+# ==== ibon SPA (2026 rewrite) helpers ====
+# PS: 2026/09 probed against ticket.ibon.com.tw (Angular SPA) + orders.ibon.com.tw.
+# - Detail page (/ActivityInfo/Details/:id) is info-only; sessions come from
+#   POST /api/ActivityInfo/GetGameInfoList -> Item.GIHtmls[].
+# - Step-2 (UTK0201_000.aspx) renders the area table inside a closed shadow
+#   DOM, but embeds the raw area JSON in a page script:
+#     jsonData = '[{"PERFORMANCE_PRICE_AREA_ID":..,"GROUP_ID":"a8 a9",..}]'
+#   Clicking an area row equals navigating to:
+#     UTK0201_001.aspx?PERFORMANCE_ID=..&GROUP_ID=..&PERFORMANCE_PRICE_AREA_ID=..
+
+def parse_ibon_area_json(page_source):
+    """Extract the embedded area JSON array (list of dict) from a step-2 page."""
+    ret_areas = []
+    if len(page_source) > 0:
+        json_text = ""
+        try:
+            matched = re.search(r"jsonData\s*=\s*'(.*?)'", page_source, re.S)
+            if not matched is None:
+                json_text = matched.group(1)
+        except Exception as exc:
+            pass
+        if len(json_text) == 0:
+            # fallback: locate the array literal directly.
+            try:
+                matched = re.search(r"(\[\{\"PERFORMANCE_PRICE_AREA_ID\".*?\}\])", page_source, re.S)
+                if not matched is None:
+                    json_text = matched.group(1)
+            except Exception as exc:
+                pass
+        if len(json_text) > 0:
+            try:
+                val = json.loads(json_text)
+                if isinstance(val, list):
+                    ret_areas = [row for row in val if isinstance(row, dict)]
+            except Exception as exc:
+                pass
+    return ret_areas
+
+def ibon_area_usable(area_item, ticket_number):
+    """True when an area row is buyable: not sold-out/disabled, enough seats."""
+    is_usable = True
+
+    amount_text = str(area_item.get("AMOUNT", "") or "")
+    background_color = str(area_item.get("BACKGROUND_COLOR", "") or "")
+    if '已售完' in amount_text:
+        is_usable = False
+    if 'disabled' in background_color:
+        is_usable = False
+
+    if is_usable:
+        if amount_text.isdigit():
+            try:
+                ticket_number_int = int(ticket_number)
+            except Exception as exc:
+                ticket_number_int = 0
+            if int(amount_text) < ticket_number_int:
+                # not enough seats for this order.
+                is_usable = False
+
+    return is_usable
+
+def ibon_area_row_text(area_item):
+    """One-line text of an area row for keyword matching: NAME + PRICE_STR."""
+    row_text = ""
+    try:
+        row_text = str(area_item.get("NAME", "") or "") + " " + str(area_item.get("PRICE_STR", "") or "")
+    except Exception as exc:
+        pass
+    return row_text.strip()
+
+def ibon_area_row_match(area_item, area_keyword_item):
+    """Space-separated keywords must all appear (legacy row-matcher semantics)."""
+    is_match = True
+    row_text = util.format_keyword_string(ibon_area_row_text(area_item))
+    if len(area_keyword_item) > 0:
+        is_match = True
+        area_keyword_array = area_keyword_item.split(' ')
+        for area_keyword in area_keyword_array:
+            area_keyword = util.format_keyword_string(area_keyword)
+            if len(area_keyword) > 0:
+                if not area_keyword in row_text:
+                    is_match = False
+                    break
+    return is_match
+
+def pick_ibon_area_target(matched_areas, auto_select_mode):
+    """Pick one area dict from the matched list by mode (top/bottom/random/center)."""
+    target_area = None
+    if not matched_areas is None:
+        matched_count = len(matched_areas)
+        if matched_count > 0:
+            target_row_index = 0
+
+            if auto_select_mode == CONST_FROM_BOTTOM_TO_TOP:
+                target_row_index = matched_count - 1
+
+            if auto_select_mode == CONST_RANDOM:
+                if matched_count > 1:
+                    target_row_index = random.randint(0, matched_count - 1)
+
+            if auto_select_mode == CONST_CENTER:
+                if matched_count > 2:
+                    target_row_index = int(matched_count / 2)
+
+            target_area = matched_areas[target_row_index]
+    return target_area
+
+def build_ibon_step3_url(current_url, performance_id, group_id, area_id):
+    """Compose the step-3 URL, equivalent to clicking an area row on step-2."""
+    base_url = "https://orders.ibon.com.tw/application/UTK02/UTK0201_001.aspx"
+    try:
+        parsed = urlparse(current_url)
+        if len(parsed.netloc) > 0:
+            base_url = parsed.scheme + "://" + parsed.netloc + "/application/UTK02/UTK0201_001.aspx"
+    except Exception as exc:
+        pass
+    query = ("PERFORMANCE_ID=" + quote(str(performance_id))
+             + "&GROUP_ID=" + quote(str(group_id))
+             + "&PERFORMANCE_PRICE_AREA_ID=" + quote(str(area_id)))
+    return base_url + "?" + query
+
+def parse_ibon_gamelist(json_text):
+    """Parse a GetGameInfoList response body into the GIHtmls row list."""
+    ret_rows = []
+    if json_text:
+        try:
+            val = json.loads(json_text)
+            item = None
+            if isinstance(val, dict):
+                item = val.get("Item")
+            if isinstance(item, dict):
+                rows = item.get("GIHtmls")
+                if isinstance(rows, list):
+                    ret_rows = [row for row in rows if isinstance(row, dict)]
+        except Exception as exc:
+            pass
+    return ret_rows
+
+def ibon_game_buyable(game_item):
+    """A GIHtmls row is enterable when not sold out and buyable."""
+    is_buyable = True
+    if game_item.get("SoldOut"):
+        is_buyable = False
+    if game_item.get("CanBuy") is False:
+        is_buyable = False
+    return is_buyable
+
+def ibon_game_row_text(game_item):
+    """One-line text of a session row: ShowSaleDate + VenueRegion + GameInfoName."""
+    parts = []
+    for key in ("ShowSaleDate", "VenueRegion", "GameInfoName"):
+        val = game_item.get(key)
+        if val:
+            parts.append(str(val).replace("\r", " ").replace("\n", " "))
+    return " ".join(" ".join(parts).split())
+
+def ibon_row_match_keyword(row_text, keyword_string):
+    """Match a row against a raw config keyword string.
+
+    Auto-quotes plain keywords (same convention as util.is_text_match_keyword),
+    so "10/03" matches one row and '"10/02","10/03"' matches either.
+    """
+    is_match = False
+    if not keyword_string is None:
+        keyword_string = str(keyword_string).strip()
+        if len(keyword_string) > 0:
+            if not '"' in keyword_string:
+                keyword_string = '"' + keyword_string + '"'
+        is_match = util.is_row_match_keyword(keyword_string, row_text)
+    return is_match
+
+def ibon_row_is_excluded(config_dict, row_text):
+    """True when the row hits the keyword_exclude option (best-effort)."""
+    is_excluded = False
+    try:
+        is_excluded = util.reset_row_text_if_match_keyword_exclude(config_dict, row_text)
+    except Exception as exc:
+        pass
+    return is_excluded
+
+def resolve_ibon_game_href(href):
+    """Turn a GIHtmls row Href into a directly-navigable URL.
+
+    The Href is normally /ActivityInfo/GoTicketURL?GoUrl=<encoded orders
+    url>, but a plain GET of that endpoint lands on a broken SPA route
+    (ticket.ibon.com.tw/<encoded url>), so pull the decoded GoUrl out and
+    go there instead.  Fall back to host-prefixing for plain relative
+    paths.
+    """
+    href = str(href or "").strip()
+    if len(href) == 0:
+        return ""
+    if "GoUrl=" in href:
+        try:
+            go_urls = parse_qs(urlparse(href).query).get("GoUrl")
+            if go_urls and len(go_urls[0]) > 0:
+                return go_urls[0]
+        except Exception:
+            pass
+    if href.startswith("/"):
+        return "https://ticket.ibon.com.tw" + href
+    return href
+
+
+def ibon_game_list_auto_select(driver, config_dict, url):
+    """SPA detail page (/ActivityInfo/Details/:id): pick a session via
+    GetGameInfoList and go to its order entry (GoTicketURL href)."""
+    show_debug_message = True       # debug.
+    show_debug_message = False      # online
+
+    if config_dict["advanced"]["verbose"]:
+        show_debug_message = True
+
+    auto_select_mode = config_dict["date_auto_select"]["mode"]
+    date_keyword = config_dict["date_auto_select"]["date_keyword"].strip()
+    auto_reload_coming_soon_page_enable = config_dict["tixcraft"]["auto_reload_coming_soon_page"]
+
+    if show_debug_message:
+        print("date_keyword:", date_keyword)
+
+    is_date_assign_by_bot = False
+
+    # fetch GetGameInfoList in page context (session cookies included).
+    json_text = ""
+    try:
+        activity_id = url.rstrip('/').split('/')[-1]
+        if '?' in activity_id:
+            activity_id = activity_id.split('?')[0]
+        js_fetch = """
+            var done = arguments[arguments.length - 1];
+            fetch('/api/ActivityInfo/GetGameInfoList', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                credentials: 'include',
+                body: JSON.stringify({id: %s, hasDeadline: true, SystemBrowseType: 0})
+            }).then(r => r.text()).then(t => done(t)).catch(e => done(''));
+        """ % (activity_id)
+        driver.set_script_timeout(10)
+        json_text = driver.execute_async_script(js_fetch)
+    except Exception as exc:
+        if show_debug_message:
+            print("ibon GetGameInfoList fetch fail:", exc)
+
+    game_rows = parse_ibon_gamelist(json_text)
+
+    # filter buyable rows.
+    formated_area_list = []
+    for row in game_rows:
+        if ibon_game_buyable(row):
+            formated_area_list.append(row)
+
+    if show_debug_message:
+        print("ibon game list buyable count:", len(formated_area_list))
+
+    matched_blocks = []
+    if len(formated_area_list) > 0:
+        if len(date_keyword) == 0:
+            matched_blocks = formated_area_list
+        else:
+            for row in formated_area_list:
+                row_text = ibon_game_row_text(row)
+                if ibon_row_is_excluded(config_dict, row_text):
+                    continue
+                if ibon_row_match_keyword(row_text, date_keyword):
+                    matched_blocks.append(row)
+
+        if show_debug_message:
+            print("after match keyword, found count:", len(matched_blocks))
+
+    target_game = pick_ibon_area_target(matched_blocks, auto_select_mode)
+    if not target_game is None:
+        href = resolve_ibon_game_href(target_game.get("Href", ""))
+        if len(href) > 0:
+            try:
+                driver.get(href)
+                is_date_assign_by_bot = True
+                print("ibon game selected:", ibon_game_row_text(target_game)[:60])
+            except Exception as exc:
+                print("goto ibon game href fail:", exc)
+    else:
+        # no buyable session matched: refresh like coming-soon pages.
+        if auto_reload_coming_soon_page_enable:
+            try:
+                driver.refresh()
+                time.sleep(0.3)
+            except Exception as exc:
+                pass
+            if config_dict["advanced"]["auto_reload_page_interval"] > 0:
+                time.sleep(config_dict["advanced"]["auto_reload_page_interval"])
+
+    return is_date_assign_by_bot
+
 def ibon_date_auto_select(driver, config_dict):
     show_debug_message = True       # debug.
     show_debug_message = False      # online
@@ -5040,189 +5333,71 @@ def ibon_area_auto_select(driver, config_dict, area_keyword_item):
 
     auto_select_mode = config_dict["area_auto_select"]["mode"]
 
-    # when avaiable seat under this count, check seat text content.
-    CONST_DETECT_SEAT_ATTRIBUTE_UNDER_ROW_COUNT = 20
-
     is_price_assign_by_bot = False
     is_need_refresh = False
 
-    area_list = None
+    # PS: 2026/09 rewrite. The area table is rendered inside a closed shadow
+    # DOM, but the raw area JSON stays in the page script, so we parse that
+    # and navigate to step-3 by URL (what a row click does).
+    page_source = ""
     try:
-        #print("try to find cityline area block")
-        #my_css_selector = "div.col-md-5 > table > tbody > tr[onclick=\"onTicketArea(this.id)\"]"
-        my_css_selector = "div.col-md-5 > table > tbody > tr:not(.disabled)"
-        area_list = driver.find_elements(By.CSS_SELECTOR, my_css_selector)
+        page_source = driver.page_source
     except Exception as exc:
-        print("find #ticket-price-tbl date list fail")
+        print("get ibon step2 page_source fail")
         print(exc)
 
-    formated_area_list = None
-    if not area_list is None:
-        area_list_count = len(area_list)
+    area_list = parse_ibon_area_json(page_source)
+
+    formated_area_list = []
+    for area_item in area_list:
+        if not ibon_area_usable(area_item, config_dict["ticket_number"]):
+            continue
+        if ibon_area_row_match(area_item, area_keyword_item):
+            formated_area_list.append(area_item)
+            if auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
+                break
+
+    if show_debug_message:
+        print("area_list_count:", len(area_list))
+        print("formated_area_list count:", len(formated_area_list))
+        print("area_keyword_item:", area_keyword_item)
+
+    target_area = pick_ibon_area_target(formated_area_list, auto_select_mode)
+
+    if target_area is None:
+        is_need_refresh = True
         if show_debug_message:
-            print("area_list_count:", area_list_count)
-            print("area_keyword_item:", area_keyword_item)
-
-        if area_list_count > 0:
-            formated_area_list = []
-            # filter list.
-            for row in area_list:
-                row_text = ""
-                row_html = ""
-                try:
-                    #row_text = row.text
-                    row_html = row.get_attribute('innerHTML')
-                    row_text = util.remove_html_tags(row_html)
-                except Exception as exc:
-                    if show_debug_message:
-                        print(exc)
-                    # error, exit loop
-                    break
-
-                if len(row_text) > 0:
-                    if '已售完' in row_text:
-                        row_text = ""
-
-                    if 'disabled' in row_html:
-                        row_text = ""
-
-                    if 'sold-out' in row_html:
-                        row_text = ""
-
-                # clean the buttom description row.
-                if len(row_text) > 0:
-                    if row_text == "座位已被選擇":
-                        row_text=""
-                    if row_text == "座位已售出":
-                        row_text=""
-                    if row_text == "舞台區域":
-                        row_text=""
-
-                if len(row_text) > 0:
-                    if util.reset_row_text_if_match_keyword_exclude(config_dict, row_text):
-                        row_text = ""
-
-                # check ticket count when amount is few, because of it spent a lot of time at parsing element.
-                if len(row_text) > 0:
-                    is_seat_remaining_checking = False
-                    # PS: when user query with keyword, but when selected row is too many, not every row to check remaing.
-                    #     may cause the matched keyword row ticket seat under user target ticket number.
-                    if auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
-                        if len(formated_area_list)==0:
-                            is_seat_remaining_checking = True
-
-                    if area_list_count <= CONST_DETECT_SEAT_ATTRIBUTE_UNDER_ROW_COUNT:
-                        is_seat_remaining_checking = True
-
-                    if is_seat_remaining_checking:
-                        try:
-                            area_seat_el = row.find_element(By.CSS_SELECTOR, 'td.action')
-                            if not area_seat_el is None:
-                                seat_text = area_seat_el.text
-                                if seat_text is None:
-                                    seat_text = ""
-                                if seat_text.isdigit():
-                                    seat_int = int(seat_text)
-                                    if seat_int < config_dict["ticket_number"]:
-                                        # skip this row.
-                                        if show_debug_message:
-                                            print("skip not enought ticket number area at row_text:", row_text)
-                                        row_text = ""
-                        except Exception as exc:
-                            if show_debug_message:
-                                print(exc)
-                            pass
-
-                if len(row_text) > 0:
-                    formated_area_list.append(row)
-        else:
-            if show_debug_message:
-                print("area_list_count is empty.")
-            pass
+            print("matched_blocks is empty, is_need_refresh")
     else:
-        if show_debug_message:
-            print("area_list_count is None.")
-        pass
-
-    if is_price_assign_by_bot:
-        formated_area_list = None
-
-    matched_blocks = []
-    if not formated_area_list is None:
-        area_list_count = len(formated_area_list)
-        if show_debug_message:
-            print("formated_area_list count:", area_list_count)
-
-        if area_list_count > 0:
-            if len(area_keyword_item) == 0:
-                matched_blocks = formated_area_list
-            else:
-                for row in formated_area_list:
-                    row_text = ""
-                    row_html = ""
-                    try:
-                        #row_text = row.text
-                        row_html = row.get_attribute('innerHTML')
-                        row_text = util.remove_html_tags(row_html)
-                    except Exception as exc:
-                        if show_debug_message:
-                            print(exc)
-                        # error, exit loop
-                        break
-
-                    if len(row_text) > 0:
-                        row_text = util.format_keyword_string(row_text)
-                        if show_debug_message:
-                            print("row_text:", row_text)
-
-                        is_match_area = False
-
-                        if len(area_keyword_item) > 0:
-                            # must match keyword.
-                            is_match_area = True
-                            area_keyword_array = area_keyword_item.split(' ')
-                            for area_keyword in area_keyword_array:
-                                area_keyword = util.format_keyword_string(area_keyword)
-                                if not area_keyword in row_text:
-                                    is_match_area = False
-                                    break
-                        else:
-                            # without keyword.
-                            is_match_area = True
-
-                        if is_match_area:
-                            matched_blocks.append(row)
-
-                            if auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
-                                break
-
-
-            if show_debug_message:
-                print("after match keyword, found count:", len(matched_blocks))
-
-    target_area = util.get_target_item_from_matched_list(matched_blocks, auto_select_mode)
-
-    if not matched_blocks is None:
-        if len(matched_blocks) == 0:
-            is_need_refresh = True
-            if show_debug_message:
-                print("matched_blocks is empty, is_need_refresh")
-
-    if not target_area is None:
+        # PERFORMANCE_ID: from the hidden input, else current url query.
+        performance_id = ""
         try:
-            if target_area.is_enabled():
-                target_area.click()
-                is_price_assign_by_bot = True
+            el_hidden = driver.find_element(By.CSS_SELECTOR, '#ctl00_ContentPlaceHolder1_PERFORMANCE_ID')
+            performance_id = el_hidden.get_attribute('value')
         except Exception as exc:
-            print("click target_area link fail")
-            print(exc)
-            # use plan B
+            pass
+        if len(performance_id) == 0:
             try:
-                print("force to click by js.")
-                driver.execute_script("arguments[0].click();", target_area)
-                is_price_assign_by_bot = True
+                parsed_query = parse_qs(urlparse(driver.current_url).query)
+                if 'PERFORMANCE_ID' in parsed_query:
+                    performance_id = parsed_query['PERFORMANCE_ID'][0]
             except Exception as exc:
                 pass
+
+        group_id = str(target_area.get("GROUP_ID", "") or "")
+        area_id = str(target_area.get("PERFORMANCE_PRICE_AREA_ID", "") or "")
+        if len(performance_id) > 0 and len(area_id) > 0:
+            target_url = build_ibon_step3_url(driver.current_url, performance_id, group_id, area_id)
+            try:
+                driver.get(target_url)
+                is_price_assign_by_bot = True
+                print("ibon area selected:", ibon_area_row_text(target_area))
+            except Exception as exc:
+                print("goto ibon step3 url fail")
+                print(exc)
+        else:
+            print("ibon PERFORMANCE_ID not found, cannot goto step3")
+            is_need_refresh = True
 
     return is_need_refresh, is_price_assign_by_bot
 
@@ -7252,7 +7427,12 @@ def ibon_main(driver, url, config_dict, ocr, Captcha_Browser):
             if is_event_page:
                 if config_dict["date_auto_select"]["enable"]:
                     is_match_target_feature = True
-                    is_date_assign_by_bot = ibon_date_auto_select(driver, config_dict)
+                    # 2026/09: detail page is an Angular SPA; sessions come
+                    # from the GetGameInfoList api, not the DOM.
+                    is_date_assign_by_bot = ibon_game_list_auto_select(driver, config_dict, url)
+                    if not is_date_assign_by_bot:
+                        # legacy fallback: old-style DOM date rows.
+                        is_date_assign_by_bot = ibon_date_auto_select(driver, config_dict)
 
     if 'ibon.com.tw/error.html?' in url.lower():
         try:
