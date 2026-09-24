@@ -336,6 +336,18 @@ def get_chrome_options(webdriver_path, config_dict):
     #chrome_options.add_experimental_option('useAutomationExtension', False)
     chrome_options.add_experimental_option("prefs", CONST_PREFS_DICT)
 
+    # hkt.hkticketing.com (快達票新平台): persistent login profile + stealth,
+    # the sufei/baxia captcha never passes on a flagged automation browser.
+    if 'hkt.hkticketing.com' in config_dict.get("homepage", ""):
+        hkt_profile_dir = os.path.join(webdriver_path, "hkt_profile")
+        if not os.path.exists(hkt_profile_dir):
+            try:
+                os.makedirs(hkt_profile_dir)
+            except Exception as exc:
+                print(exc)
+        chrome_options.add_argument('--user-data-dir=' + hkt_profile_dir)
+        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+
     if len(config_dict["advanced"]["proxy_server_port"]) > 2:
         chrome_options.add_argument('--proxy-server=%s' % config_dict["advanced"]["proxy_server_port"])
 
@@ -495,6 +507,18 @@ def get_uc_options(uc, config_dict, webdriver_path):
         brave_path = util.get_brave_bin_path()
         if os.path.exists(brave_path):
             options.binary_location = brave_path
+
+    # hkt.hkticketing.com (快達票新平台): persistent login profile + stealth,
+    # the sufei/baxia captcha never passes on a flagged automation browser.
+    if 'hkt.hkticketing.com' in config_dict.get("homepage", ""):
+        hkt_profile_dir = os.path.join(webdriver_path, "hkt_profile")
+        if not os.path.exists(hkt_profile_dir):
+            try:
+                os.makedirs(hkt_profile_dir)
+            except Exception as exc:
+                print(exc)
+        options.add_argument('--user-data-dir=' + hkt_profile_dir)
+        options.add_argument('--disable-blink-features=AutomationControlled')
 
     return options
 
@@ -836,7 +860,7 @@ def get_driver_by_config(config_dict):
                 if len(config_dict["advanced"]["cityline_account"])>0:
                     homepage = CONST_CITYLINE_SIGN_IN_URL
 
-            if 'hkticketing.com' in homepage:
+            if 'hkticketing.com' in homepage and 'hkt.hkticketing.com' not in homepage:
                 if len(config_dict["advanced"]["hkticketing_account"])>0:
                     homepage = CONST_HKTICKETING_SIGN_IN_URL
 
@@ -11924,6 +11948,728 @@ def ticketplus_main(driver, url, config_dict, ocr, Captcha_Browser):
         ticketplus_dict["is_popup_confirm"] = False
 
 
+CONST_HKT_LOGIN_HINT = "HKT: 請在瀏覽器視窗完成登入（含圖片驗證碼），通過後腳本會自動接手。"
+CONST_HKT_LOGIN_CAPTCHA_HINT = "HKT: 偵測到圖片驗證碼視窗，請人工完成；通過後腳本會自動重新送出登入。"
+CONST_HKT_LOGIN_STUCK_HINT = "HKT: 自動登入多次仍未成功，請人工檢查帳密或直接完成登入。"
+
+def hkt_parse_price_keywords(config_dict):
+    # settings 的 area_keyword 與 tixcraft 同格式：JSON 陣列字串（如 '"VIP","A/標準門票"'）。
+    area_keyword = ""
+    try:
+        area_keyword = config_dict["area_auto_select"]["area_keyword"].strip()
+    except Exception:
+        pass
+    if len(area_keyword) == 0:
+        return []
+    try:
+        keyword_items = json.loads("[" + area_keyword + "]")
+    except Exception:
+        return []
+    ret = []
+    for keyword_item in keyword_items:
+        if len(keyword_item) > 0:
+            # 保留原文；分詞後才在 hkt_get_target_tier 正規化
+            # （format_keyword_string 會移除空格，先正規化就無法分詞）。
+            ret.append(keyword_item)
+    return ret
+
+def hkt_parse_date_keywords(config_dict):
+    # settings 的 date_keyword（GUI「場次」欄）與 area_keyword 同 JSON 陣列格式。
+    date_keyword = ""
+    try:
+        date_keyword = config_dict["date_auto_select"]["date_keyword"].strip()
+    except Exception:
+        pass
+    if len(date_keyword) == 0:
+        return []
+    try:
+        keyword_items = json.loads("[" + date_keyword + "]")
+    except Exception:
+        return []
+    ret = []
+    for keyword_item in keyword_items:
+        if len(keyword_item) > 0:
+            ret.append(keyword_item)
+    return ret
+
+def hkt_get_target_tier(driver, config_dict):
+    # 票檔列 div.levelItem___xxx；售完列帶 disableClass___xxx 與「暫無可售」。
+    keyword_array = hkt_parse_price_keywords(config_dict)
+    candidates = []
+    try:
+        tier_rows = driver.find_elements(By.CSS_SELECTOR, "div[class*='levelItem_']")
+    except Exception:
+        return None
+    for row in tier_rows:
+        try:
+            row_text = util.format_keyword_string(row.text)
+            row_class = row.get_attribute("class") or ""
+        except Exception:
+            continue
+        if "disableclass" in row_class.lower():
+            continue
+        if "暫無可售" in row_text:
+            continue
+        candidates.append((row, row_text))
+    if len(candidates) == 0:
+        return None
+    if len(keyword_array) == 0:
+        # 無關鍵字：取第一個可買票檔（越便宜越後面，依頁面順序）。
+        return candidates[0]
+    for keyword_item in keyword_array:
+        # 同 house rule：先分詞再逐詞正規化，全部命中才算（AND match）。
+        keyword_tokens = keyword_item.split(" ")
+        for row, row_text in candidates:
+            is_match = True
+            for keyword_token in keyword_tokens:
+                if len(keyword_token) == 0:
+                    continue
+                keyword = util.format_keyword_string(keyword_token)
+                if keyword not in row_text:
+                    is_match = False
+                    break
+            if is_match:
+                return (row, row_text)
+    return None
+
+def hkt_select_session(driver, config_dict):
+    # 多場次活動：div.sessionListWrapper___ 的子 div 才是場次列（wrapper 自身
+    # class 也含 'sessionList_'，不能直接抓）。單場次活動無此區塊，回 None。
+    global hkt_dict
+    is_date_enable = True
+    try:
+        is_date_enable = config_dict["date_auto_select"]["enable"]
+    except Exception:
+        pass
+    if not is_date_enable:
+        return None  # 手動選場次。
+    try:
+        wrappers = driver.find_elements(By.CSS_SELECTOR, "div[class*='sessionListWrapper_']")
+    except Exception:
+        return None
+    session_rows = []
+    for wrapper in wrappers:
+        try:
+            session_rows.extend(wrapper.find_elements(By.XPATH, "./div"))
+        except Exception:
+            pass
+    if len(session_rows) == 0:
+        return None
+
+    keyword_array = hkt_parse_date_keywords(config_dict)
+    def _row_matched_by_keyword(row_text):
+        for keyword_item in keyword_array:
+            for keyword_token in keyword_item.split(" "):
+                if len(keyword_token) == 0:
+                    continue
+                if util.format_keyword_string(keyword_token) in row_text:
+                    return True
+        return False
+
+    # 關鍵字命中場次文字（如 "5月8日"）者優先。
+    matched = []
+    buyable = []
+    matched_sold_out = []
+    for row in session_rows:
+        try:
+            row_text = util.format_keyword_string(row.text)
+            row_class = (row.get_attribute("class") or "").lower()
+        except Exception:
+            continue
+        if "disableclass" in row_class or "暫無可售" in row_text:
+            if _row_matched_by_keyword(row_text):
+                matched_sold_out.append(row_text)
+            continue
+        if _row_matched_by_keyword(row_text):
+            matched.append(row)
+        else:
+            buyable.append(row)
+    if len(keyword_array) > 0:
+        if len(matched) == 0:
+            # 指定場次：不回退到其他場次（點錯場會浪費 addCart）。
+            if time.time() - hkt_dict["session_no_match_logged_time"] > 30.0:
+                hkt_dict["session_no_match_logged_time"] = time.time()
+                if len(matched_sold_out) > 0:
+                    print("HKT: 場次關鍵字命中但目前售完：", matched_sold_out)
+                else:
+                    print("HKT: 場次關鍵字未命中，現有場次：", buyable)
+            return []
+        return matched
+    return matched + buyable
+
+def hkt_target_session_selected(session_rows):
+    # 目前選中的場次列帶 fouceStyle___ class（官方 CSS 模組就拼成 fouce）。
+    for row in session_rows:
+        try:
+            row_class = (row.get_attribute("class") or "").lower()
+        except Exception:
+            continue
+        if "foucestyle" in row_class:
+            return True
+    return False
+
+def hkt_tier_name_key(tier_text):
+    # 票檔名＝價格「(」前的部分。numList/ticketNum 顯示的價格式可能與票檔列
+    # 不同（或票檔列附帶「限購」等提示文字），用票檔名前綴比對最穩。
+    name = util.format_keyword_string(tier_text).split("(")[0]
+    return name
+
+def hkt_rendered_num_list(driver, config_dict, clicked_tier_text=""):
+    # 「購買數量」區已渲染的 numList 是否可用，回 (num_list, nl_text)：
+    #   1. 票檔符合 area_keyword（無關鍵字＝皆可，用畫面上第一個）
+    #   2. 或等於剛點擊的票檔（票名前綴）
+    # numList 文字 = 票名 + "\n" + 張數。sameSource 組合票的面板 label 可能
+    # 與票檔列不同名（見 hkt_ticket_auto_select 註解），由點擊後的行為驗證。
+    keyword_array = hkt_parse_price_keywords(config_dict)
+    clicked_key = hkt_tier_name_key(clicked_tier_text) if clicked_tier_text else ""
+    try:
+        num_lists = driver.find_elements(By.CSS_SELECTOR, "div[class*='numList_']")
+    except Exception:
+        return None
+    for num_list in num_lists:
+        try:
+            nl_text = util.format_keyword_string(num_list.text)
+        except Exception:
+            continue
+        if len(nl_text) == 0:
+            continue
+        if len(keyword_array) == 0:
+            return (num_list, nl_text)
+        for keyword_item in keyword_array:
+            is_match = True
+            for keyword_token in keyword_item.split(" "):
+                if len(keyword_token) == 0:
+                    continue
+                if util.format_keyword_string(keyword_token) not in nl_text:
+                    is_match = False
+                    break
+            if is_match:
+                return (num_list, nl_text)
+        if len(clicked_key) > 0 and nl_text.startswith(clicked_key):
+            return (num_list, nl_text)
+    return None
+
+def _hkt_dump_debug_dom(driver, tag):
+    # 自動存證：選中/步進器判斷失效時把當下頁面 DOM + 截圖存到 app root，
+    # 檔名 hkt_debug_<tag>.html/.png，供下一輪除錯比對。
+    try:
+        html = driver.page_source
+        html_path = os.path.join(util.get_app_root(), "hkt_debug_%s.html" % tag)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
+    try:
+        png_path = os.path.join(util.get_app_root(), "hkt_debug_%s.png" % tag)
+        driver.save_screenshot(png_path)
+    except Exception:
+        pass
+
+def hkt_ticket_auto_select(driver, url, config_dict):
+    global hkt_dict
+    show_debug_message = False
+    if config_dict["advanced"]["verbose"]:
+        show_debug_message = True
+
+    ticket_number = 1
+    try:
+        ticket_number = int(config_dict["ticket_number"])
+    except Exception:
+        pass
+    if ticket_number < 1:
+        ticket_number = 1
+
+    is_area_enable = True
+    try:
+        is_area_enable = config_dict["area_auto_select"]["enable"]
+    except Exception:
+        pass
+    if not is_area_enable:
+        return  # 手動模式：使用者自己選票檔。
+
+    # 多場次活動（如 NCT 兩場）：要先選場次票區列才會渲染。
+    # 單場次活動 hkt_select_session 回 None，直接跳過。
+    session_rows = hkt_select_session(driver, config_dict)
+    if session_rows is not None:
+        target = hkt_get_target_tier(driver, config_dict)
+        date_keyword_array = hkt_parse_date_keywords(config_dict)
+        if len(session_rows) == 0:
+            # 場次關鍵字未命中或全售完（診斷已在 hkt_select_session 節流印出）。
+            # 整頁 refresh 重新 query 庫存，不要點其他場次。
+            time.sleep(1.0)
+            try:
+                driver.refresh()
+            except Exception as exc:
+                if show_debug_message:
+                    print(exc)
+            return
+        if len(date_keyword_array) > 0:
+            # 指定場次：選中列（fouceStyle）必須是關鍵字命中場次才繼續。
+            is_on_target = hkt_target_session_selected(session_rows)
+            if is_on_target:
+                if target is None:
+                    # 已在目標場次但還沒有可買票區：整頁 refresh 重查庫存。
+                    time.sleep(1.0)
+                    try:
+                        driver.refresh()
+                    except Exception as exc:
+                        if show_debug_message:
+                            print(exc)
+                    return
+                pass  # 已在目標場次且有可買票區，往下選票檔。
+            else:
+                if time.time() - hkt_dict["session_click_time"] < 1.2:
+                    return
+                hkt_dict["session_click_time"] = time.time()
+                try:
+                    driver.execute_script("arguments[0].click();", session_rows[0])
+                except Exception as exc:
+                    if show_debug_message:
+                        print(exc)
+                time.sleep(0.3)
+                return  # 等 React 重繪票區列，下一輪再選票檔。
+        else:
+            if target is not None:
+                pass  # 目前場次已有可買票區，不要重點同一場（會被當成切換）。
+            else:
+                # 場次輪替：依頁面順序循環，直到某場次出現可買票區。
+                if time.time() - hkt_dict["session_click_time"] < 1.2:
+                    return
+                hkt_dict["session_click_time"] = time.time()
+                row = session_rows[hkt_dict["session_cursor"] % len(session_rows)]
+                hkt_dict["session_cursor"] += 1
+                try:
+                    driver.execute_script("arguments[0].click();", row)
+                except Exception as exc:
+                    if show_debug_message:
+                        print(exc)
+                time.sleep(0.3)
+                return  # 等 React 重繪票區列，下一輪再選票檔。
+
+    target = hkt_get_target_tier(driver, config_dict)
+    if target is None:
+        # 全部售完或無符合關鍵字：定期重查（整頁 refresh 重新 query 庫存）。
+        time.sleep(1.0)
+        try:
+            driver.refresh()
+        except Exception as exc:
+            if show_debug_message:
+                print(exc)
+        return
+
+    tier_row, tier_text = target
+
+    # 「購買數量」區（numTitle「購買數量」+ numList___）：以「已渲染的
+    # numList」為準——票檔符合關鍵字（無關鍵字＝皆可）或等於剛點擊的票檔，
+    # 就直接在它上面調張數，不要求與票檔列同名。sameSource 組合票（選
+    # 「B/標準門票(企位)」後面板帶「藝人優先購票」卡、步進器從 0 起跳）
+    # label 與票檔列不同名時，靠「剛點的票檔」兜底；都不符才點票檔切換。
+    rendered = hkt_rendered_num_list(driver, config_dict, hkt_dict["tier_clicked_text"])
+    if rendered is None:
+        tier_text_norm = util.format_keyword_string(tier_text)
+        is_recent_click = (
+            util.format_keyword_string(hkt_dict["tier_clicked_text"]) == tier_text_norm
+            and time.time() - hkt_dict["tier_click_time"] < 2.0)
+        if not is_recent_click:
+            hkt_dict["tier_click_time"] = time.time()
+            hkt_dict["tier_clicked_text"] = tier_text
+            hkt_dict["qty_stall_count"] = 0
+            hkt_dict["qty_stall_hint_shown"] = False
+            hkt_dict["tier_click_count"] += 1
+            try:
+                tier_row.click()
+            except Exception as exc:
+                if show_debug_message:
+                    print(exc)
+            # 點了很多次仍未見可用的「購買數量」＝選中判斷失效，
+            # 存 DOM/截圖供診斷（約 10 秒與 30 秒時各存一次）。
+            if hkt_dict["tier_click_count"] in (5, 15):
+                print("HKT: 票檔選中判斷異常，已存 hkt_debug_select.html/.png")
+                _hkt_dump_debug_dom(driver, "select")
+        time.sleep(0.3)
+        return  # 等「購買數量」區渲染出來，下一輪再調張數。
+
+    num_list, nl_text = rendered
+    hkt_dict["tier_click_count"] = 0
+
+    # 數量步進器 buyNum___（在可接受的 numList 內找）：+/− 以 icon-jia /
+    # icon-jian 識別（位置僅兜底）。顯示張數等於設定檔才允許進下一步。
+    current = 0
+    plus_span = None
+    minus_span = None
+    try:
+        buy_num = num_list.find_element(By.CSS_SELECTOR, "div[class*='buyNum_']")
+        spans = buy_num.find_elements(By.TAG_NAME, "span")
+        for span in spans:
+            href = ""
+            try:
+                use_el = span.find_element(By.CSS_SELECTOR, "use")
+                href = (use_el.get_attribute("xlink:href") or "")
+            except Exception:
+                pass
+            if "icon-jia" in href:
+                plus_span = span
+            elif "icon-jian" in href:
+                minus_span = span
+        if plus_span is None and len(spans) > 0:
+            plus_span = spans[-1]
+        if minus_span is None and len(spans) > 0:
+            minus_span = spans[0]
+        for span in spans:
+            span_text = (span.text or "").strip()
+            if span_text.isdigit():
+                current = int(span_text)
+                break
+    except Exception as exc:
+        if show_debug_message:
+            print(exc)
+        return  # 步進器還沒渲染，下一輪再試。
+
+    def _click_span(span):
+        # 點擊階梯：JS 點與原生點擊交替（其中一種對特定活動可能無效）。
+        try:
+            if hkt_dict["qty_stall_count"] % 2 == 1:
+                span.click()
+            else:
+                driver.execute_script("arguments[0].click();", span)
+        except Exception:
+            pass
+
+    if current != ticket_number:
+        target_span = None
+        if current > ticket_number:
+            # 殘留大於設定（如改過設定檔）：點「-」減回來。
+            target_span = minus_span
+        elif current < ticket_number:
+            # 張數加不上去（+/− 連點無效＝觸及每單限購 eventOrderLimit）：
+            # 停止自動送出並提示，交人工判斷。
+            now = time.time()
+            if hkt_dict["qty_stall_count"] >= 8:
+                if not hkt_dict["qty_stall_hint_shown"]:
+                    print("HKT: 購買數量停在 %d 張（可能觸及每單限購），請人工調整。" % current)
+                    hkt_dict["qty_stall_hint_shown"] = True
+                    print("HKT: 已存 hkt_debug_qty.html/.png 供診斷。")
+                    _hkt_dump_debug_dom(driver, "qty")
+                return
+            if current != hkt_dict["qty_last_seen"]:
+                hkt_dict["qty_stall_count"] = 0
+                hkt_dict["qty_last_seen"] = current
+                hkt_dict["qty_click_time"] = now
+            elif now - hkt_dict["qty_click_time"] >= 0.6:
+                # 張數沒變且持續點 +：每 0.6 秒計一次無效點擊。
+                hkt_dict["qty_stall_count"] += 1
+                hkt_dict["qty_click_time"] = now
+            else:
+                return  # 剛點過 +、React 還沒重繪，等下一輪再讀顯示值。
+            target_span = plus_span
+        if target_span is not None:
+            _click_span(target_span)
+        time.sleep(0.15)
+        return  # 下一輪重讀「購買數量」顯示值，確認真的調到設定張數。
+
+    hkt_dict["qty_stall_count"] = 0
+    hkt_dict["qty_last_seen"] = 0
+
+    # 到這裡＝「購買數量」已顯示且張數等於設定檔。總額 > 0（價格已按張數
+    # 重算）才按「下一步」（觸發 addCartGood），節流避免重複下單。
+    if time.time() - hkt_dict["next_btn_pressed_time"] < 5.0:
+        return
+    is_ready = False
+    try:
+        total_el = driver.find_element(By.CSS_SELECTOR, "div[class*='totalWrapper_'] span")
+        total_text = (total_el.text or "").strip()
+        if len(total_text) > 0 and total_text not in ("0", "0.00"):
+            is_ready = True
+    except Exception:
+        pass
+    if is_ready:
+        try:
+            next_btns = driver.find_elements(By.XPATH, "//button[contains(., '下一步')]")
+            for next_btn in next_btns:
+                if next_btn.is_displayed():
+                    hkt_dict["next_btn_pressed_time"] = time.time()
+                    next_btn.click()
+                    break
+        except Exception as exc:
+            if show_debug_message:
+                print(exc)
+
+def hkt_agreement_is_checked(driver):
+    # 條款勾選狀態：#icon-yixuanzhong＝已勾、#icon-weixuanzhong＝未勾。
+    # 實測有效點擊目標：span.anticon（內層 icon span）；外層 div click 無效。
+    try:
+        agree_box = driver.find_element(By.CSS_SELECTOR, "div[class*='agreement-checkbox']")
+        use_el = agree_box.find_element(By.CSS_SELECTOR, "use")
+        use_href = (use_el.get_attribute("xlink:href") or "")
+        return ("yixuanzhong" in use_href), agree_box
+    except Exception:
+        return False, None
+
+def hkt_confirm_order(driver, config_dict):
+    global hkt_dict
+    # 取票方式：維持第一個選項（二維碼取票）為 active。
+    try:
+        method_items = driver.find_elements(By.CSS_SELECTOR, "span[class*='method-item']")
+        if len(method_items) > 1:
+            method_class = method_items[0].get_attribute("class") or ""
+            if "method-active" not in method_class:
+                driver.execute_script("arguments[0].click();", method_items[0])
+    except Exception:
+        pass
+
+    # 條款勾選：實測有效點擊目標是內層 span.anticon（外層 div 的 click 是
+    # no-op），點完必須重讀 icon href 確認真的翻成 yixuanzhong。
+    is_checked, agree_box = hkt_agreement_is_checked(driver)
+    if agree_box is None:
+        return "manual"
+    if not is_checked:
+        try:
+            icon_span = agree_box.find_element(By.CSS_SELECTOR, "span.anticon")
+            driver.execute_script("arguments[0].click();", icon_span)
+        except Exception:
+            pass
+        time.sleep(0.3)
+        is_checked, _ = hkt_agreement_is_checked(driver)
+        if not is_checked:
+            return "manual"  # 勾選未生效，不繼續。
+
+    # 需選位活動：勾選後自動點「分配座位」（選位≠付款，付款仍交人工）。
+    # 無此按鈕的活動維持原行為：停住等人工。10 秒節流避免重複點。
+    if time.time() - hkt_dict["seat_btn_pressed_time"] < 10.0:
+        return "seat"
+    try:
+        seat_btns = driver.find_elements(By.XPATH, "//button[contains(., '分配座位')]")
+        for seat_btn in seat_btns:
+            if seat_btn.is_displayed() and seat_btn.is_enabled():
+                hkt_dict["seat_btn_pressed_time"] = time.time()
+                driver.execute_script("arguments[0].click();", seat_btn)
+                return "seat"
+    except Exception:
+        pass
+    return "manual"
+
+_HKT_JS_SET_INPUT_VALUE = """
+const el = arguments[0], val = arguments[1];
+const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+setter.call(el, val);
+el.dispatchEvent(new Event('input', {bubbles: true}));
+el.dispatchEvent(new Event('change', {bubbles: true}));
+"""
+
+def hkt_close_cookie_banner(driver):
+    # 全站浮動 Cookies 同意條（#cookieContainer）：「同意並關閉」。不關會蓋住
+    # 底部「下一步」等按鈕。點完容器即移除，每輪嘗試無副作用。
+    try:
+        close_divs = driver.find_elements(By.CSS_SELECTOR, "div[class*='cookie_close']")
+        for close_div in close_divs:
+            if close_div.is_displayed():
+                driver.execute_script("arguments[0].click();", close_div)
+                break
+    except Exception:
+        pass
+
+def hkt_login_captcha_dialog_present(driver):
+    # 風控圖片驗證（baxia/sufei punish）視窗：iframe src 帶 punish/_____tmd_____。
+    try:
+        els = driver.find_elements(
+            By.CSS_SELECTOR,
+            "iframe[src*='punish'], iframe[src*='_____tmd_____'], div[id*='baxia']")
+        return len(els) > 0
+    except Exception:
+        return False
+
+def _hkt_find_login_inputs(driver):
+    # 登入表單：帳號（電子郵件/手機號碼）+ 密碼。頁首搜尋框（placeholder 含
+    # 「節目/表演/搜尋」）不是登入欄位，要避開。回 (account_input, password_input)。
+    password_input = None
+    try:
+        for el in driver.find_elements(By.CSS_SELECTOR, "input[type='password']"):
+            try:
+                if el.is_displayed():
+                    password_input = el
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if password_input is None:
+        return None, None
+    account_input = None
+    fallback_input = None
+    skip_keywords = ("節目", "表演", "搜尋", "search", "Search")
+    mail_keywords = ("電子郵件", "手機", "電郵", "email", "Email", "帳號")
+    try:
+        for el in driver.find_elements(By.CSS_SELECTOR, "input:not([type='password'])"):
+            try:
+                if not el.is_displayed():
+                    continue
+                el_type = (el.get_attribute("type") or "text").lower()
+                if el_type not in ("text", "tel", "email", ""):
+                    continue
+                placeholder = el.get_attribute("placeholder") or ""
+                if any(kw in placeholder for kw in skip_keywords):
+                    continue
+                if any(kw in placeholder for kw in mail_keywords):
+                    account_input = el
+                    break
+                if fallback_input is None:
+                    fallback_input = el
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if account_input is None:
+        account_input = fallback_input
+    return account_input, password_input
+
+def _hkt_find_login_button(driver):
+    # 登入鈕 class 帶 regis（button.mz-button.regis）；再以文字「登入」兜底。
+    try:
+        for btn in driver.find_elements(By.CSS_SELECTOR, "button[class*='regis']"):
+            try:
+                if btn.is_displayed():
+                    return btn
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        for btn in driver.find_elements(By.XPATH, "//button[contains(., '登入') or contains(., 'Login')]"):
+            try:
+                if btn.is_displayed():
+                    return btn
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+def hkt_login_auto_fill(driver, config_dict):
+    # 登入頁自動帶入 settings 的 hkticketing 帳密並送出。圖片驗證碼（風控
+    # punish 視窗）仍需人工；解完後自動重送 userLogin（session 正常時一次過）。
+    global hkt_dict
+    account = ""
+    password = ""
+    try:
+        account = config_dict["advanced"]["hkticketing_account"].strip()
+    except Exception:
+        pass
+    try:
+        password = config_dict["advanced"]["hkticketing_password_plaintext"].strip()
+    except Exception:
+        pass
+    if len(password) == 0:
+        try:
+            password = util.decryptMe(config_dict["advanced"]["hkticketing_password"])
+            password = password.strip()
+        except Exception:
+            pass
+    # 歷史設定檔偶發把反斜線黏在帳號前，清掉免得登入失敗。
+    account = account.replace("\\", "").strip()
+
+    if len(account) == 0 or len(password) == 0:
+        if not hkt_dict["is_login_hint_shown"]:
+            print(CONST_HKT_LOGIN_HINT)
+            hkt_dict["is_login_hint_shown"] = True
+        return
+
+    if hkt_login_captcha_dialog_present(driver):
+        if not hkt_dict["is_captcha_hint_shown"]:
+            print(CONST_HKT_LOGIN_CAPTCHA_HINT)
+            hkt_dict["is_captcha_hint_shown"] = True
+        return  # 人工解驗證碼；解完後（視窗消失）下一輪重送登入。
+
+    account_input, password_input = _hkt_find_login_inputs(driver)
+    if password_input is None:
+        return  # 表單還沒渲染完，等下一輪。
+
+    is_dirty = False
+    try:
+        if (account_input is not None) and (account_input.get_attribute("value") or "") != account:
+            driver.execute_script(_HKT_JS_SET_INPUT_VALUE, account_input, account)
+            is_dirty = True
+        if (password_input.get_attribute("value") or "") != password:
+            driver.execute_script(_HKT_JS_SET_INPUT_VALUE, password_input, password)
+            is_dirty = True
+    except Exception:
+        return  # 元素被 React 重繪，下一輪再試。
+
+    if is_dirty:
+        time.sleep(0.2)
+
+    # 送出：剛填完值立刻送；之後若還停在登入頁（驗證碼流程中/帳密錯），
+    # 每 5 秒重送一次、最多 15 次，避免無限重試造成帳號鎖定風險。
+    if hkt_dict["login_submit_count"] >= 15:
+        if not hkt_dict["is_login_stuck_hint"]:
+            print(CONST_HKT_LOGIN_STUCK_HINT)
+            hkt_dict["is_login_stuck_hint"] = True
+        return
+    if (not is_dirty) and (time.time() - hkt_dict["login_click_time"] < 5.0):
+        return
+    login_btn = _hkt_find_login_button(driver)
+    if login_btn is None:
+        return
+    hkt_dict["login_click_time"] = time.time()
+    hkt_dict["login_submit_count"] += 1
+    try:
+        driver.execute_script("arguments[0].click();", login_btn)
+    except Exception:
+        pass
+
+def hkt_main(driver, url, config_dict):
+    global hkt_dict
+    if not "hkt_dict" in globals():
+        hkt_dict = {}
+        hkt_dict["is_login_hint_shown"] = False
+        hkt_dict["is_captcha_hint_shown"] = False
+        hkt_dict["is_login_stuck_hint"] = False
+        hkt_dict["login_click_time"] = 0.0
+        hkt_dict["login_submit_count"] = 0
+        hkt_dict["is_popup_confirm"] = False
+        hkt_dict["next_btn_pressed_time"] = 0.0
+        hkt_dict["seat_btn_pressed_time"] = 0.0
+        hkt_dict["session_cursor"] = 0
+        hkt_dict["session_click_time"] = 0.0
+        hkt_dict["session_no_match_logged_time"] = 0.0
+        hkt_dict["tier_click_time"] = 0.0
+        hkt_dict["tier_clicked_text"] = ""
+        hkt_dict["tier_click_count"] = 0
+        hkt_dict["qty_click_time"] = 0.0
+        hkt_dict["qty_last_seen"] = 0
+        hkt_dict["qty_stall_count"] = 0
+        hkt_dict["qty_stall_hint_shown"] = False
+
+    # SPA 登入牆：自動帶入 settings 的帳密並送出；圖片驗證碼需人工，
+    # session 被風控標記時驗證不會通過，等 URL 離開 #/login 後才繼續。
+    if "#/login" in url:
+        hkt_login_auto_fill(driver, config_dict)
+        return
+    hkt_dict["is_login_hint_shown"] = False
+    hkt_dict["is_captcha_hint_shown"] = False
+    hkt_dict["is_login_stuck_hint"] = False
+    hkt_dict["login_submit_count"] = 0
+
+    # 全站浮動 Cookies 同意條：「同意並關閉」。不關會蓋住底部「下一步」。
+    hkt_close_cookie_banner(driver)
+
+    if "/selectTicket" in url:
+        hkt_ticket_auto_select(driver, url, config_dict)
+        return
+
+    if "/confirmOrder" in url:
+        confirm_mode = hkt_confirm_order(driver, config_dict)
+        if not hkt_dict["is_popup_confirm"]:
+            hkt_dict["is_popup_confirm"] = True
+            play_sound_while_ordering(config_dict)
+            # 到此為止：選位與付款交人工（3DS/風控）。
+            if confirm_mode == "seat":
+                print("HKT: 確認訂單頁已就緒，已自動點擊「分配座位」，請人工選位並完成付款。")
+            else:
+                print("HKT: 確認訂單頁已就緒（取票方式+條款已處理），請人工檢查並完成付款。")
+        return
+
+    hkt_dict["is_popup_confirm"] = False
+
 def facebook_main(driver, config_dict):
     facebook_account = config_dict["advanced"]["facebook_account"].strip()
     facebook_password = config_dict["advanced"]["facebook_password_plaintext"].strip()
@@ -12274,8 +13020,13 @@ def main(args):
         if 'cityline.com' in url:
             cityline_main(driver, url, config_dict)
 
+        # hkt.hkticketing.com (快達票新平台, maizuo/umi SPA) — 專用 handler；
+        # 不可落入 softix（選擇器與流程完全不相容）。
+        if 'hkt.hkticketing.com' in url:
+            hkt_main(driver, url, config_dict)
+
         softix_family = False
-        if 'hkticketing.com' in url:
+        if 'hkticketing.com' in url and 'hkt.hkticketing.com' not in url:
             softix_family = True
         if 'galaxymacau.com' in url:
             softix_family = True

@@ -9,6 +9,7 @@ webdriver/*/data/settings.json
 webdriver/*/data/*.jsonl
 webdriver/*/data/session*
 webdriver/*/profile/**/*
+webdriver/hkt_profile/
 
 # === Machine-readable / transient analysis artifacts ===
 *_page.html
@@ -22,6 +23,7 @@ reg_*.js_plain.js
 
 # === Sensitive: account credentials & plaintext passwords ===
 settings.json
+test_hkt_config.json
 
 # === Local development noise ===
 *.log

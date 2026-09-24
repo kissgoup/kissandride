@@ -85,6 +85,7 @@ CONST_SUPPORTED_SITES = ["https://kktix.com"
     ,"http://www.urbtix.hk/ (城市)"
     ,"https://www.cityline.com/ (買飛)"
     ,"https://hotshow.hkticketing.com/ (快達票)"
+    ,"https://hkt.hkticketing.com/ (快達票-新平台)"
     ,"https://ticketing.galaxymacau.com/ (澳門銀河)"
     ,"http://premier.ticketek.com.au"
     ]
